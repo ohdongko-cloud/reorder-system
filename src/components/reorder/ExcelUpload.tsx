@@ -45,10 +45,17 @@ export function ExcelUpload({ onClose }: Props) {
       fd.append('base_date', baseDate)
 
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
-      const data = await res.json()
+
+      let data: Record<string, unknown>
+      try {
+        data = await res.json()
+      } catch {
+        toast.error(`서버 응답 오류 (HTTP ${res.status}) — 파일 크기나 형식을 확인하세요.`)
+        return
+      }
 
       if (!res.ok) {
-        toast.error(data.error ?? '업로드 실패')
+        toast.error(data.error as string ?? '업로드 실패')
         return
       }
 
