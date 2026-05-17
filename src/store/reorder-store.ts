@@ -1,0 +1,152 @@
+import { create } from 'zustand'
+import type { StyleRow, ColorRow, ReorderSession, Strategy } from '@/types/reorder'
+import { calcOld, calcNew, calcDeltaPct } from '@/lib/reorder-calc'
+import { MIN_RECOMMEND_QTY } from '@/lib/constants'
+
+interface ReorderState {
+  sessions: ReorderSession[]
+  currentSession: ReorderSession | null
+  styles: StyleRow[]
+  isLoading: boolean
+  isSaving: boolean
+
+  setSessions: (sessions: ReorderSession[]) => void
+  setCurrentSession: (session: ReorderSession | null) => void
+  setStyles: (styles: StyleRow[]) => void
+  setLoading: (v: boolean) => void
+
+  updateColorField: (
+    styleId: string,
+    colorId: string,
+    field: 'n' | 's' | 't' | 'r' | 'aj',
+    value: number
+  ) => void
+
+  setStyleStrategy: (styleId: string, strategy: Strategy) => void
+
+  recalcStyle: (styleId: string) => void
+  recalcAll: () => void
+
+  // Returns only styles where at least 1 color has calcNew >= MIN_RECOMMEND_QTY
+  getFilteredStyles: () => StyleRow[]
+
+  getTotals: () => { totalOld: number; totalNew: number; totalAj: number }
+  getFilteredTotals: () => { totalOld: number; totalNew: number; totalAj: number }
+}
+
+function recalcColor(color: ColorRow, style: StyleRow): ColorRow {
+  const old = calcOld(color.l, color.m, color.n, color.r, color.s, color.t, style.stores)
+  const nw = calcNew(
+    color.l, color.m, color.n, color.r, color.s, color.t,
+    style.stores, style.plc, style.days_since_inbound, style.strategy
+  )
+
+  return {
+    ...color,
+    calcOld: old?.ad ?? null,
+    calcNew: nw?.ad ?? null,
+    qRate: old?.q ?? null,
+    uOld: old?.u ?? null,
+    uNew: nw?.u ?? null,
+    wUsed: nw?.w ?? null,
+    delta: (old && nw) ? calcDeltaPct(old.ad, nw.ad) : null,
+  }
+}
+
+export const useReorderStore = create<ReorderState>((set, get) => ({
+  sessions: [],
+  currentSession: null,
+  styles: [],
+  isLoading: false,
+  isSaving: false,
+
+  setSessions: (sessions) => set({ sessions }),
+  setCurrentSession: (session) => set({ currentSession: session }),
+  setLoading: (v) => set({ isLoading: v }),
+
+  setStyles: (styles) => {
+    const calculated = styles.map(style => ({
+      ...style,
+      strategy: style.strategy ?? 3,
+      colors: style.colors.map(c => recalcColor(c, { ...style, strategy: style.strategy ?? 3 })),
+    }))
+    set({ styles: calculated })
+  },
+
+  updateColorField: (styleId, colorId, field, value) => {
+    set(state => {
+      const styles = state.styles.map(style => {
+        if (style.id !== styleId) return style
+        const colors = style.colors.map(c => {
+          if (c.id !== colorId) return c
+          const updated = { ...c, [field]: value }
+          return recalcColor(updated, style)
+        })
+        return { ...style, colors }
+      })
+      return { styles }
+    })
+  },
+
+  setStyleStrategy: (styleId, strategy) => {
+    set(state => {
+      const styles = state.styles.map(style => {
+        if (style.id !== styleId) return style
+        const updated = { ...style, strategy }
+        return { ...updated, colors: updated.colors.map(c => recalcColor(c, updated)) }
+      })
+      return { styles }
+    })
+  },
+
+  recalcStyle: (styleId) => {
+    set(state => {
+      const styles = state.styles.map(style => {
+        if (style.id !== styleId) return style
+        return { ...style, colors: style.colors.map(c => recalcColor(c, style)) }
+      })
+      return { styles }
+    })
+  },
+
+  recalcAll: () => {
+    set(state => ({
+      styles: state.styles.map(style => ({
+        ...style,
+        colors: style.colors.map(c => recalcColor(c, style)),
+      })),
+    }))
+  },
+
+  getFilteredStyles: () => {
+    return get().styles.filter(style =>
+      style.colors.some(c => (c.calcNew ?? 0) >= MIN_RECOMMEND_QTY)
+    )
+  },
+
+  getTotals: () => {
+    const { styles } = get()
+    let totalOld = 0, totalNew = 0, totalAj = 0
+    for (const style of styles) {
+      for (const c of style.colors) {
+        totalOld += c.calcOld ?? 0
+        totalNew += c.calcNew ?? 0
+        totalAj  += c.aj
+      }
+    }
+    return { totalOld, totalNew, totalAj }
+  },
+
+  getFilteredTotals: () => {
+    const styles = get().getFilteredStyles()
+    let totalOld = 0, totalNew = 0, totalAj = 0
+    for (const style of styles) {
+      for (const c of style.colors) {
+        totalOld += c.calcOld ?? 0
+        totalNew += c.calcNew ?? 0
+        totalAj  += c.aj
+      }
+    }
+    return { totalOld, totalNew, totalAj }
+  },
+}))
