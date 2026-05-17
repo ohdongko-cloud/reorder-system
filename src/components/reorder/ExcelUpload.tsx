@@ -46,7 +46,11 @@ export function ExcelUpload({ onClose }: Props) {
 
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
 
-      let data: Record<string, unknown>
+      type UploadResponse = {
+        session_id?: string; session_name?: string; style_count?: number
+        sheet_used?: string; warnings?: string[]; error?: string; errors?: string[]
+      }
+      let data: UploadResponse
       try {
         data = await res.json()
       } catch {
@@ -55,7 +59,7 @@ export function ExcelUpload({ onClose }: Props) {
       }
 
       if (!res.ok) {
-        toast.error(data.error as string ?? '업로드 실패')
+        toast.error(data.error ?? '업로드 실패')
         return
       }
 
@@ -65,11 +69,13 @@ export function ExcelUpload({ onClose }: Props) {
       }
 
       // Load styles from new session
-      const stylesRes = await fetch(`/api/sessions/${data.session_id}/styles`)
+      const sessionId   = data.session_id!
+      const sessionName = data.session_name!
+      const stylesRes = await fetch(`/api/sessions/${sessionId}/styles`)
       const stylesData = await stylesRes.json()
       setStyles(stylesData)
-      setCurrentSession({ id: data.session_id, name: data.session_name, base_date: baseDate, created_by: null, created_at: new Date().toISOString() })
-      setSessions([{ id: data.session_id, name: data.session_name, base_date: baseDate, created_by: null, created_at: new Date().toISOString() }, ...sessions])
+      setCurrentSession({ id: sessionId, name: sessionName, base_date: baseDate, created_by: null, created_at: new Date().toISOString() })
+      setSessions([{ id: sessionId, name: sessionName, base_date: baseDate, created_by: null, created_at: new Date().toISOString() }, ...sessions])
       onClose()
     } catch {
       toast.error('네트워크 오류가 발생했습니다.')
