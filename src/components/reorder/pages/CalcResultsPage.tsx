@@ -97,16 +97,16 @@ export function CalcResultsPage() {
             <col style={{ width: 172 }} />
             <col style={{ width: 100 }} />
             <col style={{ width: 64 }} />
-            <col style={{ width: 64 }} />
             <col style={{ width: 62 }} />
-            <col style={{ width: 80 }} />
+            <col style={{ width: 88 }} />
+            <col style={{ width: 72 }} />
+            <col style={{ width: 72 }} />
+            <col style={{ width: 64 }} />
+            <col style={{ width: 64 }} />
             <col style={{ width: 84 }} />
             <col style={{ width: 72 }} />
             <col style={{ width: 72 }} />
             <col style={{ width: 104 }} />
-            <col style={{ width: 72 }} />
-            <col style={{ width: 72 }} />
-            <col style={{ width: 88 }} />
             <col style={{ width: 48 }} />
           </colgroup>
           <thead className="sticky top-0 z-20">
@@ -114,22 +114,39 @@ export function CalcResultsPage() {
               <th rowSpan={3} className="px-3 py-2 text-left text-[11px] border-r border-slate-600 align-bottom">스타일</th>
               <th rowSpan={3} className="px-2 py-2 text-left text-[11px] align-bottom">컬러</th>
               <th rowSpan={3} className="px-2 py-2 text-center text-[11px] align-bottom">PLC</th>
-              <th colSpan={3} className="px-2 pt-2 pb-1 text-center text-[10px] font-semibold border-l-2 border-slate-500">수동 입력</th>
-              <th colSpan={3} className="px-2 pt-2 pb-1 text-center text-[10px] font-semibold border-l-2 border-slate-500">기존 로직 (W=0.3)</th>
-              <th colSpan={3} className="px-2 pt-2 pb-1 text-center text-[10px] font-semibold border-l-2 border-slate-500">신규 로직 (PLC보정·동적W)</th>
+              <th colSpan={4} className="px-2 pt-2 pb-1 text-center text-[10px] font-semibold border-l-2 border-slate-500">신규 로직 (PLC보정·동적W)</th>
+              <th colSpan={5} className="px-2 pt-2 pb-1 text-center text-[10px] font-semibold border-l-2 border-slate-500">기존 로직 (W=0.3)</th>
               <th rowSpan={3} className="px-2 py-2 text-center text-[11px] align-bottom border-l-2 border-slate-500">MD확정<br />(AJ)</th>
               <th rowSpan={3} className="px-2 py-2 text-center text-[11px] align-bottom border-l border-slate-600">위험</th>
             </tr>
             <tr className="bg-slate-800 text-slate-200 text-[9px]">
-              <th className="px-1 pb-1 text-center border-l-2 border-slate-500">N (개/주)</th>
-              <th className="px-1 pb-1 text-center">S (주)</th>
-              <th className="px-1 pb-1 text-center">T값</th>
-              <th className="px-1 pb-1 text-center border-l-2 border-slate-500">추천 (개)</th>
-              <th className="px-1 pb-1 text-center">주판율</th>
-              <th className="px-1 pb-1 text-center">U값</th>
-              <th className="px-1 pb-1 text-center border-l-2 border-slate-500">추천 (개)</th>
-              <th className="px-1 pb-1 text-center">vs기존</th>
-              <th className="px-1 pb-1 text-center">U값</th>
+              <th className="px-1 pb-1 text-center border-l-2 border-slate-500 whitespace-nowrap">
+                T 보정<InfoTooltip text="주판량 배수. PLC 단계 자동 보정 (도입기×1.4 / 성장기×1.2 / 유지기×1.0 / 쇠퇴기×0.85)" />
+              </th>
+              <th className="px-1 pb-1 text-center whitespace-nowrap">
+                신규 추천<InfoTooltip text="PLC 보정T + 동적W + 발주전략 적용 신규 로직 추천량" />
+              </th>
+              <th className="px-1 pb-1 text-center whitespace-nowrap">
+                기존 대비<InfoTooltip text="신규 추천이 기존 추천 대비 몇 % 증감했는지 표시" />
+              </th>
+              <th className="px-1 pb-1 text-center whitespace-nowrap">
+                확산율(U)<InfoTooltip text="매장 확산 계수. 전체 매장 대비 현재 투입 매장 비율 보정값" />
+              </th>
+              <th className="px-1 pb-1 text-center border-l-2 border-slate-500 whitespace-nowrap">
+                주판량(N)<InfoTooltip text="주간 예상 판매 수량. 입고 후 주당 판매되는 개수 (직접 입력)" />
+              </th>
+              <th className="px-1 pb-1 text-center whitespace-nowrap">
+                판매기간(S)<InfoTooltip text="입고 후 예상 판매 기간 (주 단위, 직접 입력)" />
+              </th>
+              <th className="px-1 pb-1 text-center whitespace-nowrap">
+                기존 추천<InfoTooltip text="W=0.3 고정 기존 로직 기준 추천 발주량" />
+              </th>
+              <th className="px-1 pb-1 text-center whitespace-nowrap">
+                판매율(Q)<InfoTooltip text="판매 효율 = 주판량 ÷ 입고량" />
+              </th>
+              <th className="px-1 pb-1 text-center whitespace-nowrap">
+                확산율(U)<InfoTooltip text="매장 확산 계수. 전체 매장 대비 현재 투입 매장 비율 보정값" />
+              </th>
             </tr>
             <tr className="bg-slate-700 border-b-2 border-slate-900">
               <td colSpan={14} className="p-0 h-0" />
@@ -317,16 +334,8 @@ function StyleRows({
               </td>
             )}
 
-            {/* N */}
+            {/* T — 신규 로직 수동입력 */}
             <td className="px-1.5 py-1 border-l-2 border-slate-200">
-              <InlineNumberInput value={color.n} onChange={v => onUpdateColor(style.id, color.id, 'n', v)} min={0} disabled={inactive} />
-            </td>
-            {/* S */}
-            <td className="px-1.5 py-1">
-              <InlineNumberInput value={color.s} onChange={v => onUpdateColor(style.id, color.id, 's', v)} min={1} max={52} disabled={inactive} />
-            </td>
-            {/* T */}
-            <td className="px-1.5 py-1">
               <button
                 onClick={() => onTModal(color, style)}
                 disabled={inactive}
@@ -340,23 +349,9 @@ function StyleRows({
               </button>
             </td>
 
-            {/* 기존 로직 추천 — 배경 강조 */}
-            <td className={cn(
-              'px-2 py-1 text-right border-l-2 border-slate-200 tabular-nums font-semibold',
-              inactive ? 'bg-white text-slate-300' : 'bg-slate-100 text-slate-700'
-            )}>
-              {inactive ? '—' : fmt(calcOld)}
-            </td>
-            <td className="px-2 py-1 text-right text-[10px] text-slate-500 tabular-nums">
-              {qRate != null ? (qRate * 100).toFixed(1) + '%' : '—'}
-            </td>
-            <td className="px-2 py-1 text-right text-[10px] text-slate-500 tabular-nums">
-              {uOld != null ? uOld.toFixed(2) + 'x' : '—'}
-            </td>
-
             {/* 신규 로직 추천 — 배경 강조 */}
             <td className={cn(
-              'px-2 py-1 text-right border-l-2 border-slate-200 tabular-nums font-bold',
+              'px-2 py-1 text-right tabular-nums font-bold',
               inactive ? 'bg-white text-slate-300' : 'bg-blue-50 text-blue-800'
             )}>
               {inactive ? '—' : fmt(calcNew)}
@@ -366,6 +361,29 @@ function StyleRows({
             </td>
             <td className="px-2 py-1 text-right text-[10px] text-slate-500 tabular-nums">
               {uNew != null ? uNew.toFixed(2) + 'x' : '—'}
+            </td>
+
+            {/* N — 기존 로직 수동입력 */}
+            <td className="px-1.5 py-1 border-l-2 border-slate-200">
+              <InlineNumberInput value={color.n} onChange={v => onUpdateColor(style.id, color.id, 'n', v)} min={0} disabled={inactive} />
+            </td>
+            {/* S — 기존 로직 수동입력 */}
+            <td className="px-1.5 py-1">
+              <InlineNumberInput value={color.s} onChange={v => onUpdateColor(style.id, color.id, 's', v)} min={1} max={52} disabled={inactive} />
+            </td>
+
+            {/* 기존 로직 추천 — 배경 강조 */}
+            <td className={cn(
+              'px-2 py-1 text-right tabular-nums font-semibold',
+              inactive ? 'bg-white text-slate-300' : 'bg-slate-100 text-slate-700'
+            )}>
+              {inactive ? '—' : fmt(calcOld)}
+            </td>
+            <td className="px-2 py-1 text-right text-[10px] text-slate-500 tabular-nums">
+              {qRate != null ? (qRate * 100).toFixed(1) + '%' : '—'}
+            </td>
+            <td className="px-2 py-1 text-right text-[10px] text-slate-500 tabular-nums">
+              {uOld != null ? uOld.toFixed(2) + 'x' : '—'}
             </td>
 
             {/* AJ */}
@@ -412,21 +430,30 @@ function StyleSubtotalRow({ style }: { style: StyleRow }) {
   return (
     <tr className="bg-slate-100 border-t-2 border-b-2 border-slate-300 text-xs font-semibold">
       <td colSpan={3} className="px-3 py-1 text-slate-500 text-[10px]">▶ {style.code} 소계</td>
-      <td colSpan={3} className="border-l-2 border-slate-200" />
-      <td className="px-2 py-1 text-right tabular-nums border-l-2 border-slate-200 bg-slate-200 text-slate-700">
-        {hasOld ? sumOld.toLocaleString() : '—'}
-      </td>
-      <td /><td />
-      <td className="px-2 py-1 text-right tabular-nums border-l-2 border-slate-200 bg-blue-100 text-blue-800">
+      {/* T (신규 수동입력 — empty) */}
+      <td className="border-l-2 border-slate-200" />
+      {/* 신규 추천 */}
+      <td className="px-2 py-1 text-right tabular-nums bg-blue-100 text-blue-800">
         {hasNew ? sumNew.toLocaleString() : '—'}
       </td>
+      {/* 기존 대비 */}
       <td className={cn(
         'px-2 py-1 text-right text-[10px] tabular-nums',
         delta !== null && delta > 5 ? 'text-red-600' : delta !== null && delta < -5 ? 'text-blue-600' : 'text-slate-400'
       )}>
         {delta !== null ? (delta >= 0 ? '+' : '') + delta.toFixed(1) + '%' : '—'}
       </td>
+      {/* 확산율(U) 신규 — empty */}
       <td />
+      {/* N, S (기존 수동입력 — empty) */}
+      <td colSpan={2} className="border-l-2 border-slate-200" />
+      {/* 기존 추천 */}
+      <td className="px-2 py-1 text-right tabular-nums bg-slate-200 text-slate-700">
+        {hasOld ? sumOld.toLocaleString() : '—'}
+      </td>
+      {/* 판매율Q, 확산율U 기존 — empty */}
+      <td /><td />
+      {/* AJ */}
       <td className="px-2 py-1 text-right tabular-nums border-l-2 border-slate-200 text-emerald-700">
         {sumAj > 0 ? sumAj.toLocaleString() : '—'}
       </td>
@@ -455,6 +482,17 @@ function PlcBadge({ plc }: { plc: string }) {
   return (
     <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-semibold', map[plc] ?? '')}>
       {plc}
+    </span>
+  )
+}
+
+function InfoTooltip({ text }: { text: string }) {
+  return (
+    <span className="relative group inline-flex items-center ml-0.5 align-middle">
+      <span className="text-[9px] text-slate-400 group-hover:text-slate-200 cursor-help leading-none select-none">ℹ</span>
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-48 bg-slate-900 text-slate-100 text-[10px] rounded px-2 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-normal text-center leading-relaxed shadow-xl border border-slate-700">
+        {text}
+      </span>
     </span>
   )
 }

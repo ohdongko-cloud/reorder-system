@@ -48,13 +48,14 @@ export const SAFETY_FACTOR = 1.15  // AD = AC × 1.15
 export const MIN_RECOMMEND_QTY = 300
 
 // 발주 전략 5단계: W 조정값 (1=보수적, 3=표준, 5=공격적)
-// W가 낮을수록 재고 여유를 더 많이 가져감 → 추천 수량 증가 (공격적)
+// AC=(L+AB)/(1-W)-L 공식에서 W가 높을수록 추천 수량 증가
+// 공격적(5) → W 증가 → 추천↑ / 보수적(1) → W 감소 → 추천↓
 export const STRATEGY_W_DELTA: Record<number, number> = {
-  1: +0.10,   // 보수적 (W 증가 → 추천↓)
-  2: +0.05,
+  1: -0.10,   // 보수적 (W 감소 → 추천↓)
+  2: -0.05,
   3:  0.00,   // 표준
-  4: -0.05,
-  5: -0.10,   // 공격적 (W 감소 → 추천↑)
+  4: +0.05,
+  5: +0.10,   // 공격적 (W 증가 → 추천↑)
 }
 
 export const STRATEGY_LABELS: Record<number, string> = {
