@@ -6,7 +6,7 @@ const PUBLIC = ['/login', '/api/auth']
 const getSecret = () =>
   new TextEncoder().encode(process.env.AUTH_SECRET ?? 'dev-secret-please-set-in-production')
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (PUBLIC.some(p => pathname.startsWith(p))) return NextResponse.next()
