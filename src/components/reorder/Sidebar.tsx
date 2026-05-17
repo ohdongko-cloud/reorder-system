@@ -29,7 +29,7 @@ export function Sidebar({ current, onChange }: Props) {
     <aside className="w-52 bg-slate-900 text-white flex flex-col shrink-0 min-h-screen">
       {/* Logo */}
       <div className="px-4 py-4 border-b border-slate-700">
-        <div className="text-sm font-bold tracking-tight text-white">MI 리오더 점검</div>
+        <div className="text-sm font-bold tracking-tight text-white">의류CU 리오더</div>
         <div className="text-[10px] text-slate-400 mt-0.5">Reorder Automation</div>
       </div>
 

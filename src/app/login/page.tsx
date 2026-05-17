@@ -98,8 +98,8 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-blue-600 rounded-2xl mb-4 shadow-lg shadow-blue-600/30">
             <ShieldCheck className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">MI 리오더 점검</h1>
-          <p className="text-slate-400 text-sm mt-1.5">이랜드 MI 브랜드 내부 시스템</p>
+          <h1 className="text-2xl font-bold text-white tracking-tight">의류CU 리오더</h1>
+          <p className="text-slate-400 text-sm mt-1.5">이랜드 의류CU 내부 시스템</p>
         </div>
 
         <Suspense fallback={

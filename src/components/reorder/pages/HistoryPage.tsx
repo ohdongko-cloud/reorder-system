@@ -86,7 +86,7 @@ export function HistoryPage() {
 
             {/* Contact card */}
             <a
-              href="mailto:OH_DONGHA01@ELAND.CO.KR?subject=[MI 리오더] 개선 요청"
+              href="mailto:OH_DONGHA01@ELAND.CO.KR?subject=[의류CU 리오더] 개선 요청"
               className="flex items-center gap-3 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded-xl px-4 py-3 transition group"
             >
               <div className="flex items-center justify-center w-9 h-9 bg-blue-600 rounded-lg shrink-0 group-hover:bg-blue-700 transition">
