@@ -15,22 +15,72 @@ interface Props {
   style: StyleRow
 }
 
-// Mock "similar previous-season products" derived from store data
-function useSimilarStyles(style: StyleRow, currentColorId: string) {
+// 스타일 코드 문자 기반 일치도 (0~1)
+function computeCodeSimilarity(a: string, b: string): number {
+  const aLow = a.toLowerCase()
+  const bLow = b.toLowerCase()
+
+  // 공통 접두사 길이 (연속 일치)
+  let prefix = 0
+  const minLen = Math.min(aLow.length, bLow.length)
+  for (let i = 0; i < minLen; i++) {
+    if (aLow[i] === bLow[i]) prefix++
+    else break
+  }
+
+  // 문자 집합 중복도
+  const aSet = new Set(aLow.split(''))
+  const bSet = new Set(bLow.split(''))
+  let shared = 0
+  aSet.forEach(c => { if (bSet.has(c)) shared++ })
+  const charOverlap = shared / Math.max(aSet.size, bSet.size)
+
+  return (prefix / Math.max(a.length, b.length)) * 0.7 + charOverlap * 0.3
+}
+
+interface SimilarEntry {
+  code: string
+  color: string
+  plc: string
+  t: number
+  calcNew: number | null
+  similarity: number // 0~1
+}
+
+function useSimilarStyles(style: StyleRow): SimilarEntry[] {
   const styles = useReorderStore(s => s.styles)
-  // Find other colors/styles with similar characteristics (same PLC, close price)
-  const similar: { code: string; color: string; t: number; calcNew: number | null }[] = []
+
+  const candidates: SimilarEntry[] = []
+
   for (const s of styles) {
     if (s.id === style.id) continue
-    if (s.plc !== style.plc) continue
-    if (Math.abs(s.price - style.price) > 30000) continue
+    const sim = computeCodeSimilarity(style.code, s.code)
+    if (sim < 0.25) continue  // 최소 일치도 기준
+
     for (const c of s.colors) {
-      if (similar.length >= 3) break
-      similar.push({ code: s.code, color: c.color_name, t: c.t, calcNew: c.calcNew ?? null })
+      candidates.push({
+        code: s.code,
+        color: c.color_name,
+        plc: s.plc,
+        t: c.t,
+        calcNew: c.calcNew ?? null,
+        similarity: sim,
+      })
     }
-    if (similar.length >= 3) break
   }
-  return similar
+
+  // 스타일 코드별로 대표 컬러 1개만 (일치도 순)
+  candidates.sort((a, b) => b.similarity - a.similarity)
+  const seen = new Set<string>()
+  const result: SimilarEntry[] = []
+  for (const c of candidates) {
+    if (seen.has(c.code)) continue
+    seen.add(c.code)
+    result.push(c)
+    if (result.length >= 5) break
+  }
+
+  return result
 }
 
 export function TModal({ open, onClose, color, style }: Props) {
@@ -48,9 +98,8 @@ export function TModal({ open, onClose, color, style }: Props) {
     }
   }, [open, color.t, color.s, color.r])
 
-  const similar = useSimilarStyles(style, color.id)
+  const similar = useSimilarStyles(style)
 
-  // Real-time preview with current slider values
   const preview = calcNew(
     color.l, color.m, color.n, localR, localS, localT,
     style.stores, style.plc, style.days_since_inbound, style.strategy
@@ -67,7 +116,7 @@ export function TModal({ open, onClose, color, style }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-sm">
             T값 / 입력 조정 — <span className="font-mono">{style.code}</span> · {color.color_name}
@@ -84,27 +133,60 @@ export function TModal({ open, onClose, color, style }: Props) {
             <span className="text-[11px] text-slate-400">경과 {style.days_since_inbound}일</span>
           </div>
 
-          {/* Similar styles reference */}
-          {similar.length > 0 && (
-            <div>
-              <div className="text-[11px] font-semibold text-slate-600 mb-1.5">유사 스타일 참고</div>
-              <div className="space-y-1">
-                {similar.map((s, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setLocalT(s.t)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 rounded border border-slate-200 text-xs bg-slate-50 hover:bg-blue-50 hover:border-blue-300 transition-colors text-left"
-                  >
-                    <span className="font-mono text-slate-700">{s.code}</span>
-                    <span className="text-slate-500">{s.color}</span>
-                    <span className="text-blue-600 font-semibold">T={s.t.toFixed(1)}</span>
-                    <span className="text-slate-400">{s.calcNew?.toLocaleString() ?? '—'}개</span>
-                  </button>
-                ))}
-              </div>
-              <div className="text-[10px] text-slate-400 mt-1">클릭하면 T값이 적용됩니다</div>
+          {/* 유사 스타일 참고 (과거 상품명 일치도 기준 상위 5개) */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-semibold text-slate-700">유사 스타일 참고</span>
+              <span className="text-[10px] text-slate-400">스타일 코드 일치도 기준 상위 5개</span>
             </div>
-          )}
+
+            {similar.length > 0 ? (
+              <div className="space-y-1">
+                {similar.map((s, i) => {
+                  const pctMatch = Math.round(s.similarity * 100)
+                  const plcColor: Record<string, string> = {
+                    '도입기': 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                    '성장기': 'bg-blue-50 text-blue-700 border-blue-200',
+                    '유지기': 'bg-orange-50 text-orange-700 border-orange-200',
+                    '쇠퇴기': 'bg-red-50 text-red-700 border-red-200',
+                  }
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setLocalT(s.t)}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 rounded border border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-300 transition-colors text-left"
+                    >
+                      {/* 일치도 % */}
+                      <span className="text-[10px] font-bold text-slate-400 w-8 shrink-0 tabular-nums">
+                        {pctMatch}%
+                      </span>
+                      {/* 스타일 코드 */}
+                      <span className="font-mono text-[11px] text-slate-700 flex-1 truncate">{s.code}</span>
+                      {/* PLC 배지 */}
+                      <span className={cn('text-[9px] px-1 py-0.5 rounded border font-semibold shrink-0', plcColor[s.plc] ?? '')}>
+                        {s.plc}
+                      </span>
+                      {/* T값 */}
+                      <span className="text-blue-600 font-bold text-[11px] w-10 text-right shrink-0">
+                        T={s.t.toFixed(1)}
+                      </span>
+                      {/* 추천수량 */}
+                      <span className="text-slate-400 text-[10px] w-14 text-right shrink-0 tabular-nums">
+                        {s.calcNew != null ? s.calcNew.toLocaleString() + '개' : '—'}
+                      </span>
+                    </button>
+                  )
+                })}
+                <p className="text-[10px] text-slate-400 text-center mt-1">
+                  클릭하면 해당 스타일의 T값이 적용됩니다
+                </p>
+              </div>
+            ) : (
+              <div className="text-[11px] text-slate-400 text-center py-2 bg-slate-50 rounded border border-slate-100">
+                일치도 25% 이상인 유사 스타일이 없습니다
+              </div>
+            )}
+          </div>
 
           {/* T slider */}
           <div>
@@ -129,8 +211,7 @@ export function TModal({ open, onClose, color, style }: Props) {
             <div>
               <label className="text-xs text-slate-600 block mb-1">판매기간 S (주)</label>
               <input
-                type="number"
-                min={1} max={52}
+                type="number" min={1} max={52}
                 value={localS}
                 onChange={e => setLocalS(Number(e.target.value))}
                 className="w-full border border-slate-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
@@ -139,8 +220,7 @@ export function TModal({ open, onClose, color, style }: Props) {
             <div>
               <label className="text-xs text-slate-600 block mb-1">재고조정 R (배수)</label>
               <input
-                type="number"
-                min={0} max={10} step={0.1}
+                type="number" min={0} max={10} step={0.1}
                 value={localR}
                 onChange={e => setLocalR(Number(e.target.value))}
                 className="w-full border border-slate-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
@@ -172,15 +252,11 @@ export function TModal({ open, onClose, color, style }: Props) {
             <button
               onClick={onClose}
               className="px-4 py-1.5 rounded border border-slate-300 text-xs text-slate-600 hover:bg-slate-50"
-            >
-              취소
-            </button>
+            >취소</button>
             <button
               onClick={handleConfirm}
               className="px-4 py-1.5 rounded bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700"
-            >
-              적용
-            </button>
+            >적용</button>
           </div>
         </div>
       </DialogContent>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useCallback } from 'react'
 import { useReorderStore } from '@/store/reorder-store'
 import { InlineNumberInput } from '../InlineNumberInput'
 import { StrategySelector } from '../StrategySelector'
@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { CheckCircle, X } from 'lucide-react'
 import type { ColorRow, StyleRow } from '@/types/reorder'
+import { useState } from 'react'
 
 function fmt(n: number | null | undefined) {
   if (n == null) return '—'
@@ -20,29 +21,33 @@ function fmtPct(n: number | null | undefined) {
   return (n >= 0 ? '+' : '') + n.toFixed(1) + '%'
 }
 
-// T값 modal state
 interface TModalState {
   open: boolean
   color: ColorRow | null
   style: StyleRow | null
 }
 
-// 발주 확정 modal state
-interface ConfirmState {
-  open: boolean
-}
-
 export function CalcResultsPage() {
-  const getFilteredStyles = useReorderStore(s => s.getFilteredStyles)
-  const getFilteredTotals = useReorderStore(s => s.getFilteredTotals)
+  // Subscribe to styles directly so component re-renders when strategy changes
+  const styles = useReorderStore(s => s.styles)
   const updateColorField = useReorderStore(s => s.updateColorField)
   const currentSession = useReorderStore(s => s.currentSession)
 
   const [tModal, setTModal] = useState<TModalState>({ open: false, color: null, style: null })
-  const [confirmModal, setConfirmModal] = useState<ConfirmState>({ open: false })
+  const [confirmModal, setConfirmModal] = useState(false)
 
-  const filteredStyles = getFilteredStyles()
-  const { totalOld, totalNew, totalAj } = getFilteredTotals()
+  const filteredStyles = styles.filter(style =>
+    style.colors.some(c => (c.calcNew ?? 0) >= MIN_RECOMMEND_QTY)
+  )
+
+  let totalOld = 0, totalNew = 0, totalAj = 0
+  for (const style of filteredStyles) {
+    for (const c of style.colors) {
+      totalOld += c.calcOld ?? 0
+      totalNew += c.calcNew ?? 0
+      totalAj  += c.aj
+    }
+  }
 
   const update = useCallback(
     (styleId: string, colorId: string, field: 'n' | 's' | 't' | 'r' | 'aj', value: number) => {
@@ -53,13 +58,6 @@ export function CalcResultsPage() {
 
   function openTModal(color: ColorRow, style: StyleRow) {
     setTModal({ open: true, color, style })
-  }
-
-  function handleConfirmAll() {
-    setConfirmModal({ open: false })
-    toast.success('발주가 확정되었습니다.', {
-      description: `총 ${totalAj.toLocaleString()}장 · ${filteredStyles.length}개 스타일`,
-    })
   }
 
   if (filteredStyles.length === 0) {
@@ -84,7 +82,7 @@ export function CalcResultsPage() {
           )}
         </div>
         <button
-          onClick={() => setConfirmModal({ open: true })}
+          onClick={() => setConfirmModal(true)}
           className="px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded hover:bg-blue-700 flex items-center gap-1.5"
         >
           <CheckCircle className="w-3.5 h-3.5" />
@@ -96,7 +94,7 @@ export function CalcResultsPage() {
       <div className="flex-1 overflow-auto">
         <table className="w-full min-w-[1020px] border-collapse text-xs bg-white">
           <colgroup>
-            <col style={{ width: 148 }} />
+            <col style={{ width: 172 }} />
             <col style={{ width: 100 }} />
             <col style={{ width: 64 }} />
             <col style={{ width: 64 }} />
@@ -112,7 +110,6 @@ export function CalcResultsPage() {
             <col style={{ width: 48 }} />
           </colgroup>
           <thead className="sticky top-0 z-20">
-            {/* Group row */}
             <tr className="bg-slate-800 text-slate-100 text-[10px]">
               <th rowSpan={3} className="px-3 py-2 text-left text-[11px] border-r border-slate-600 align-bottom">스타일</th>
               <th rowSpan={3} className="px-2 py-2 text-left text-[11px] align-bottom">컬러</th>
@@ -123,7 +120,6 @@ export function CalcResultsPage() {
               <th rowSpan={3} className="px-2 py-2 text-center text-[11px] align-bottom border-l-2 border-slate-500">MD확정<br />(AJ)</th>
               <th rowSpan={3} className="px-2 py-2 text-center text-[11px] align-bottom border-l border-slate-600">위험</th>
             </tr>
-            {/* Sub-group row (strategy under style) */}
             <tr className="bg-slate-800 text-slate-200 text-[9px]">
               <th className="px-1 pb-1 text-center border-l-2 border-slate-500">N (개/주)</th>
               <th className="px-1 pb-1 text-center">S (주)</th>
@@ -135,7 +131,6 @@ export function CalcResultsPage() {
               <th className="px-1 pb-1 text-center">vs기존</th>
               <th className="px-1 pb-1 text-center">U값</th>
             </tr>
-            {/* bottom border row */}
             <tr className="bg-slate-700 border-b-2 border-slate-900">
               <td colSpan={14} className="p-0 h-0" />
             </tr>
@@ -195,18 +190,16 @@ export function CalcResultsPage() {
       )}
 
       {/* 발주 확정 modal */}
-      {confirmModal.open && (
+      {confirmModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
           <div className="bg-white rounded-xl shadow-xl w-80 p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-slate-800">발주 확정</h3>
-              <button onClick={() => setConfirmModal({ open: false })}>
+              <button onClick={() => setConfirmModal(false)}>
                 <X className="w-4 h-4 text-slate-400" />
               </button>
             </div>
-            <p className="text-xs text-slate-600 mb-4">
-              아래 수량으로 발주를 확정합니다.
-            </p>
+            <p className="text-xs text-slate-600 mb-4">아래 수량으로 발주를 확정합니다.</p>
             <div className="bg-slate-50 rounded-lg p-3 mb-4 space-y-1.5 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-500">스타일 수</span>
@@ -225,17 +218,18 @@ export function CalcResultsPage() {
             </div>
             <div className="flex gap-2 justify-end">
               <button
-                onClick={() => setConfirmModal({ open: false })}
+                onClick={() => setConfirmModal(false)}
                 className="px-4 py-1.5 rounded border border-slate-300 text-xs text-slate-600 hover:bg-slate-50"
-              >
-                취소
-              </button>
+              >취소</button>
               <button
-                onClick={handleConfirmAll}
+                onClick={() => {
+                  setConfirmModal(false)
+                  toast.success('발주가 확정되었습니다.', {
+                    description: `총 ${totalAj.toLocaleString()}장 · ${filteredStyles.length}개 스타일`,
+                  })
+                }}
                 className="px-4 py-1.5 rounded bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700"
-              >
-                확정
-              </button>
+              >확정</button>
             </div>
           </div>
         </div>
@@ -257,26 +251,6 @@ function StyleRows({
 
   return (
     <>
-      {/* Strategy row */}
-      <tr className="bg-slate-50/80 border-b border-slate-100">
-        <td className="px-3 py-1 border-r border-slate-200" rowSpan={1}>
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[11px] font-bold text-slate-800">{style.code}</span>
-            <StyleTypeBadge type={style.type} />
-            <span className="text-[10px] text-slate-400">{style.stores}매장 · {style.days_since_inbound}일</span>
-          </div>
-        </td>
-        <td colSpan={2} className="px-2 py-1">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-slate-500">발주전략</span>
-            <StrategySelector styleId={style.id} strategy={style.strategy} />
-            <span className="text-[10px] text-slate-400">{STRATEGY_LABELS[style.strategy]}</span>
-          </div>
-        </td>
-        <td colSpan={11} />
-      </tr>
-
-      {/* Color rows */}
       {style.colors.map((color, ci) => {
         const inactive = color.l === 0
         const { calcOld, calcNew, qRate, uOld, uNew, delta } = color
@@ -303,10 +277,23 @@ function StyleRows({
               inactive && 'opacity-40'
             )}
           >
-            {/* Style cell with rowspan for first color */}
+            {/* Style cell — shown only for first color, spans all colors */}
             {ci === 0 && (
-              <td className="px-3 py-1.5 align-top border-r border-slate-200 bg-white" rowSpan={colorCount}>
-                <div className="text-[10px] text-slate-500 tabular-nums">₩{style.price.toLocaleString()}</div>
+              <td className="px-3 py-2 align-top border-r border-slate-200 bg-white" rowSpan={colorCount}>
+                {/* Code + badge */}
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="font-mono text-[11px] font-bold text-slate-800">{style.code}</span>
+                  <StyleTypeBadge type={style.type} />
+                </div>
+                {/* Stores + days */}
+                <div className="text-[10px] text-slate-400 mt-0.5">{style.stores}매장 · {style.days_since_inbound}일</div>
+                {/* Price */}
+                <div className="text-[10px] font-medium text-slate-600 tabular-nums mt-0.5">₩{style.price.toLocaleString()}</div>
+                {/* Strategy — 가격 아래, 스타일 코드와 같은 셀 */}
+                <div className="mt-1.5 pt-1.5 border-t border-slate-100 flex items-center gap-1 flex-wrap">
+                  <StrategySelector styleId={style.id} strategy={style.strategy} />
+                  <span className="text-[9px] text-slate-400 ml-0.5">{STRATEGY_LABELS[style.strategy]}</span>
+                </div>
               </td>
             )}
 
@@ -338,7 +325,7 @@ function StyleRows({
             <td className="px-1.5 py-1">
               <InlineNumberInput value={color.s} onChange={v => onUpdateColor(style.id, color.id, 's', v)} min={1} max={52} disabled={inactive} />
             </td>
-            {/* T — button opens modal */}
+            {/* T */}
             <td className="px-1.5 py-1">
               <button
                 onClick={() => onTModal(color, style)}
@@ -353,9 +340,12 @@ function StyleRows({
               </button>
             </td>
 
-            {/* 기존 로직 */}
-            <td className="px-2 py-1 text-right border-l-2 border-slate-200 tabular-nums">
-              {inactive ? <span className="text-slate-300">—</span> : fmt(calcOld)}
+            {/* 기존 로직 추천 — 배경 강조 */}
+            <td className={cn(
+              'px-2 py-1 text-right border-l-2 border-slate-200 tabular-nums font-semibold',
+              inactive ? 'bg-white text-slate-300' : 'bg-slate-100 text-slate-700'
+            )}>
+              {inactive ? '—' : fmt(calcOld)}
             </td>
             <td className="px-2 py-1 text-right text-[10px] text-slate-500 tabular-nums">
               {qRate != null ? (qRate * 100).toFixed(1) + '%' : '—'}
@@ -364,9 +354,12 @@ function StyleRows({
               {uOld != null ? uOld.toFixed(2) + 'x' : '—'}
             </td>
 
-            {/* 신규 로직 */}
-            <td className="px-2 py-1 text-right font-semibold text-blue-700 border-l-2 border-slate-200 tabular-nums">
-              {inactive ? <span className="text-slate-300">—</span> : fmt(calcNew)}
+            {/* 신규 로직 추천 — 배경 강조 */}
+            <td className={cn(
+              'px-2 py-1 text-right border-l-2 border-slate-200 tabular-nums font-bold',
+              inactive ? 'bg-white text-slate-300' : 'bg-blue-50 text-blue-800'
+            )}>
+              {inactive ? '—' : fmt(calcNew)}
             </td>
             <td className={cn('px-2 py-1 text-right text-[10px] tabular-nums', deltaClass)}>
               {hasCalc && !inactive ? fmtPct(delta) : '—'}
@@ -420,11 +413,11 @@ function StyleSubtotalRow({ style }: { style: StyleRow }) {
     <tr className="bg-slate-100 border-t-2 border-b-2 border-slate-300 text-xs font-semibold">
       <td colSpan={3} className="px-3 py-1 text-slate-500 text-[10px]">▶ {style.code} 소계</td>
       <td colSpan={3} className="border-l-2 border-slate-200" />
-      <td className="px-2 py-1 text-right tabular-nums border-l-2 border-slate-200 text-slate-700">
+      <td className="px-2 py-1 text-right tabular-nums border-l-2 border-slate-200 bg-slate-200 text-slate-700">
         {hasOld ? sumOld.toLocaleString() : '—'}
       </td>
       <td /><td />
-      <td className="px-2 py-1 text-right tabular-nums border-l-2 border-slate-200 text-blue-700">
+      <td className="px-2 py-1 text-right tabular-nums border-l-2 border-slate-200 bg-blue-100 text-blue-800">
         {hasNew ? sumNew.toLocaleString() : '—'}
       </td>
       <td className={cn(
