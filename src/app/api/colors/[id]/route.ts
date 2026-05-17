@@ -1,32 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createAdminSupabaseClient } from '@/lib/supabase'
+import sql from '@/lib/db'
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const db = createAdminSupabaseClient()
   const body = await req.json()
 
-  // Only allow updating MD input fields + AJ
-  const allowed = ['n', 'r', 's', 't', 'aj']
-  const update: Record<string, number> = {}
-  for (const key of allowed) {
-    if (key in body) update[key] = Number(body[key])
-  }
-
-  if (Object.keys(update).length === 0) {
+  const allowed = ['n', 'r', 's', 't', 'aj'] as const
+  const hasAny = allowed.some(k => k in body)
+  if (!hasAny) {
     return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
   }
 
-  const { data, error } = await db
-    .from('colors')
-    .update(update)
-    .eq('id', id)
-    .select()
-    .single()
+  const n  = 'n'  in body ? Number(body.n)  : null
+  const r  = 'r'  in body ? Number(body.r)  : null
+  const s  = 's'  in body ? Number(body.s)  : null
+  const t  = 't'  in body ? Number(body.t)  : null
+  const aj = 'aj' in body ? Number(body.aj) : null
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+  try {
+    // COALESCE keeps existing value when param is null (field not provided)
+    const [row] = await sql`
+      UPDATE colors SET
+        n  = COALESCE(${n}::integer,  n),
+        r  = COALESCE(${r}::numeric,  r),
+        s  = COALESCE(${s}::numeric,  s),
+        t  = COALESCE(${t}::numeric,  t),
+        aj = COALESCE(${aj}::integer, aj)
+      WHERE id = ${id}
+      RETURNING *
+    `
+    if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json(row)
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
 }

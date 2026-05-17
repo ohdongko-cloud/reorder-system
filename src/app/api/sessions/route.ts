@@ -1,32 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createAdminSupabaseClient } from '@/lib/supabase'
+import sql from '@/lib/db'
 
 export async function GET() {
-  const db = createAdminSupabaseClient()
-  const { data, error } = await db
-    .from('session_summary')
-    .select('*')
-    .order('created_at', { ascending: false })
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+  try {
+    const data = await sql`
+      SELECT s.id, s.name, s.base_date, s.created_at,
+             COUNT(st.id)::integer AS style_count
+      FROM reorder_sessions s
+      LEFT JOIN styles st ON st.session_id = s.id
+      GROUP BY s.id, s.name, s.base_date, s.created_at
+      ORDER BY s.created_at DESC
+    `
+    return NextResponse.json(data)
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const db = createAdminSupabaseClient()
-  const body = await req.json()
-  const { name, base_date } = body
-
+  const { name, base_date } = await req.json()
   if (!name || !base_date) {
     return NextResponse.json({ error: 'name and base_date required' }, { status: 400 })
   }
-
-  const { data, error } = await db
-    .from('reorder_sessions')
-    .insert({ name, base_date })
-    .select()
-    .single()
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data, { status: 201 })
+  try {
+    const [session] = await sql`
+      INSERT INTO reorder_sessions (name, base_date)
+      VALUES (${name}, ${base_date})
+      RETURNING *
+    `
+    return NextResponse.json(session, { status: 201 })
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
 }

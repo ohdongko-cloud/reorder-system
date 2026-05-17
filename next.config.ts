@@ -7,7 +7,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  `connect-src 'self' ${process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'https://*.supabase.co'} wss://*.supabase.co`,
+  "connect-src 'self' https://*.neon.tech",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

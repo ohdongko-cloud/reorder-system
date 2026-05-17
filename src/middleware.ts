@@ -1,53 +1,39 @@
-import { createServerClient } from '@supabase/ssr'
+import { jwtVerify } from 'jose'
 import { NextResponse, type NextRequest } from 'next/server'
 
 const PUBLIC = ['/login', '/api/auth']
 
+const getSecret = () =>
+  new TextEncoder().encode(process.env.AUTH_SECRET ?? 'dev-secret-please-set-in-production')
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Allow public paths without auth check
-  if (PUBLIC.some(p => pathname.startsWith(p))) {
+  if (PUBLIC.some(p => pathname.startsWith(p))) return NextResponse.next()
+
+  // Dev: skip auth when no password configured
+  if (process.env.NODE_ENV !== 'production' && !process.env.AUTH_PASSWORD) {
     return NextResponse.next()
   }
 
-  // In development (no .env.local), skip auth entirely
-  if (process.env.NODE_ENV !== 'production') return NextResponse.next()
+  const token = request.cookies.get('auth-token')?.value
+  if (!token) return redirectToLogin(request)
 
-  let supabaseResponse = NextResponse.next({ request })
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    {
-      cookies: {
-        getAll() { return request.cookies.getAll() },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({ request })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          )
-        },
-      },
-    }
-  )
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    url.searchParams.set('next', pathname)
-    return NextResponse.redirect(url)
+  try {
+    await jwtVerify(token, getSecret())
+    return NextResponse.next()
+  } catch {
+    return redirectToLogin(request)
   }
+}
 
-  return supabaseResponse
+function redirectToLogin(req: NextRequest) {
+  const url = req.nextUrl.clone()
+  url.pathname = '/login'
+  url.searchParams.set('next', req.nextUrl.pathname)
+  return NextResponse.redirect(url)
 }
 
 export const config = {
-  matcher: [
-    '/reorder/:path*',
-    '/api/((?!auth).*)',
-  ],
+  matcher: ['/reorder/:path*', '/api/((?!auth).*)'],
 }
