@@ -36,8 +36,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '스타일 데이터가 없습니다.' }, { status: 400 })
     }
 
-    const errors: string[] = []
-
     // 1. Create session
     const [session] = await sql`
       INSERT INTO reorder_sessions (name, base_date)
@@ -45,34 +43,59 @@ export async function POST(req: NextRequest) {
       RETURNING id, name
     `
 
-    // 2. Insert styles + colors
-    for (const style of styles) {
-      let dbStyleId: string
-      try {
-        const [dbStyle] = await sql`
-          INSERT INTO styles (session_id, code, type, price, days_since_inbound, stores, plc)
-          VALUES (${session.id}, ${style.code}, ${style.type}, ${style.price},
-                  ${style.days_since_inbound}, ${style.stores}, ${style.plc})
-          RETURNING id
-        `
-        dbStyleId = dbStyle.id
-      } catch (e) {
-        errors.push(`스타일 ${style.code} 저장 실패: ${String(e)}`)
-        continue
-      }
+    // 2. Bulk insert styles — 1 query instead of N
+    const codes  = styles.map(s => s.code)
+    const types  = styles.map(s => s.type)
+    const prices = styles.map(s => s.price)
+    const days   = styles.map(s => s.days_since_inbound)
+    const stores = styles.map(s => s.stores)
+    const plcs   = styles.map(s => s.plc)
 
+    const insertedStyles = await sql`
+      INSERT INTO styles (session_id, code, type, price, days_since_inbound, stores, plc)
+      SELECT
+        ${session.id}::uuid,
+        unnest(${codes}::text[]),
+        unnest(${types}::text[]),
+        unnest(${prices}::int[]),
+        unnest(${days}::int[]),
+        unnest(${stores}::int[]),
+        unnest(${plcs}::text[])
+      RETURNING id, code
+    `
+
+    // Build code → DB ID map
+    const codeToDbId = new Map(
+      (insertedStyles as { id: string; code: string }[]).map(r => [r.code, r.id])
+    )
+
+    // 3. Collect all colors
+    const allColors: (ColorRow & { db_style_id: string })[] = []
+    for (const style of styles) {
+      const dbId = codeToDbId.get(style.code)
+      if (!dbId) continue
       for (const c of style.colors) {
-        try {
-          await sql`
-            INSERT INTO colors (style_id, color_name, color_hex, k, l, m, n, r, s, t, aj)
-            VALUES (${dbStyleId}, ${c.color_name}, ${c.color_hex ?? null},
-                    ${c.k}, ${c.l}, ${c.m}, ${c.n},
-                    ${c.r}, ${c.s}, ${c.t}, ${c.aj})
-          `
-        } catch (e) {
-          errors.push(`${style.code}/${c.color_name} 저장 실패: ${String(e)}`)
-        }
+        allColors.push({ ...c, db_style_id: dbId })
       }
+    }
+
+    // 4. Bulk insert colors — 1 query instead of M
+    if (allColors.length > 0) {
+      await sql`
+        INSERT INTO colors (style_id, color_name, color_hex, k, l, m, n, r, s, t, aj)
+        SELECT
+          unnest(${allColors.map(c => c.db_style_id)}::uuid[]),
+          unnest(${allColors.map(c => c.color_name)}::text[]),
+          unnest(${allColors.map(c => c.color_hex ?? null)}::text[]),
+          unnest(${allColors.map(c => c.k)}::int[]),
+          unnest(${allColors.map(c => c.l)}::int[]),
+          unnest(${allColors.map(c => c.m)}::int[]),
+          unnest(${allColors.map(c => c.n)}::int[]),
+          unnest(${allColors.map(c => c.r)}::numeric[]),
+          unnest(${allColors.map(c => c.s)}::numeric[]),
+          unnest(${allColors.map(c => c.t)}::numeric[]),
+          unnest(${allColors.map(c => c.aj)}::int[])
+      `
     }
 
     return NextResponse.json({
@@ -80,7 +103,7 @@ export async function POST(req: NextRequest) {
       session_name: session.name,
       style_count:  styles.length,
       sheet_used:   sheet_name,
-      warnings:     errors,
+      warnings:     [],
     }, { status: 201 })
 
   } catch (e) {
