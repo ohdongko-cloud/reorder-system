@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import sql from '@/lib/db'
-import { parseReorderExcel } from '@/lib/excel-parser'
+import type { StyleRow, ColorRow } from '@/types/reorder'
 
 // Rate limit: 10 uploads / IP / minute
 const rl = new Map<string, { count: number; resetAt: number }>()
@@ -22,33 +22,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const formData   = await req.formData()
-    const file        = formData.get('file') as File | null
-    const sessionName = formData.get('name') as string | null
-    const baseDate    = formData.get('base_date') as string | null
-
-    if (!file)        return NextResponse.json({ error: '파일이 없습니다.' }, { status: 400 })
-    if (!sessionName) return NextResponse.json({ error: '세션 이름이 없습니다.' }, { status: 400 })
-    if (!baseDate)    return NextResponse.json({ error: '기준일이 없습니다.' }, { status: 400 })
-
-    if (file.size > 20 * 1024 * 1024) {
-      return NextResponse.json({ error: '파일 크기는 20MB 이하여야 합니다.' }, { status: 400 })
-    }
-    if (!file.name.match(/\.(xlsx|xls)$/i)) {
-      return NextResponse.json({ error: '엑셀 파일(.xlsx, .xls)만 업로드 가능합니다.' }, { status: 400 })
+    const body = await req.json()
+    const { name, base_date, sheet_name, styles } = body as {
+      name: string
+      base_date: string
+      sheet_name: string
+      styles: (Omit<StyleRow, 'session_id'> & { colors: ColorRow[] })[]
     }
 
-    const buffer = await file.arrayBuffer()
-    const { styles, errors, sheetName } = await parseReorderExcel(buffer)
-
-    if (styles.length === 0) {
-      return NextResponse.json({ error: errors[0] ?? '파싱 실패 — BI 시트가 없거나 MI 스타일 데이터를 찾을 수 없습니다.', errors }, { status: 422 })
+    if (!name)      return NextResponse.json({ error: '세션 이름이 없습니다.' }, { status: 400 })
+    if (!base_date) return NextResponse.json({ error: '기준일이 없습니다.' }, { status: 400 })
+    if (!Array.isArray(styles) || styles.length === 0) {
+      return NextResponse.json({ error: '스타일 데이터가 없습니다.' }, { status: 400 })
     }
+
+    const errors: string[] = []
 
     // 1. Create session
     const [session] = await sql`
       INSERT INTO reorder_sessions (name, base_date)
-      VALUES (${sessionName}, ${baseDate})
+      VALUES (${name}, ${base_date})
       RETURNING id, name
     `
 
@@ -72,7 +65,7 @@ export async function POST(req: NextRequest) {
         try {
           await sql`
             INSERT INTO colors (style_id, color_name, color_hex, k, l, m, n, r, s, t, aj)
-            VALUES (${dbStyleId}, ${c.color_name}, ${c.color_hex},
+            VALUES (${dbStyleId}, ${c.color_name}, ${c.color_hex ?? null},
                     ${c.k}, ${c.l}, ${c.m}, ${c.n},
                     ${c.r}, ${c.s}, ${c.t}, ${c.aj})
           `
@@ -86,7 +79,7 @@ export async function POST(req: NextRequest) {
       session_id:   session.id,
       session_name: session.name,
       style_count:  styles.length,
-      sheet_used:   sheetName,
+      sheet_used:   sheet_name,
       warnings:     errors,
     }, { status: 201 })
 

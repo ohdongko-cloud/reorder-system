@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { Upload, FileSpreadsheet, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { parseReorderExcel } from '@/lib/excel-parser'
 
 interface Props {
   onClose: () => void
@@ -39,22 +40,32 @@ export function ExcelUpload({ onClose }: Props) {
 
     setUploading(true)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('name', name)
-      fd.append('base_date', baseDate)
+      // 브라우저에서 파싱 — 원본 파일을 서버로 전송하지 않아 크기 제한 없음
+      const buffer = await file.arrayBuffer()
+      const { styles, errors, sheetName } = await parseReorderExcel(buffer)
 
-      const res = await fetch('/api/upload', { method: 'POST', body: fd })
+      if (styles.length === 0) {
+        toast.error(errors[0] ?? '파싱 실패 — BI 시트가 없거나 MI 스타일 데이터를 찾을 수 없습니다.')
+        if (errors.length > 1) errors.slice(1).forEach(w => toast.warning(w))
+        return
+      }
+
+      // 파싱된 JSON만 서버로 전송
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, base_date: baseDate, sheet_name: sheetName, styles }),
+      })
 
       type UploadResponse = {
         session_id?: string; session_name?: string; style_count?: number
-        sheet_used?: string; warnings?: string[]; error?: string; errors?: string[]
+        sheet_used?: string; warnings?: string[]; error?: string
       }
       let data: UploadResponse
       try {
         data = await res.json()
       } catch {
-        toast.error(`서버 응답 오류 (HTTP ${res.status}) — 파일 크기나 형식을 확인하세요.`)
+        toast.error(`서버 응답 오류 (HTTP ${res.status})`)
         return
       }
 
@@ -64,11 +75,8 @@ export function ExcelUpload({ onClose }: Props) {
       }
 
       toast.success(`${data.style_count}개 스타일 업로드 완료 (${data.sheet_used})`)
-      if (data.warnings?.length) {
-        data.warnings.forEach((w: string) => toast.warning(w))
-      }
+      if (errors.length) errors.forEach(w => toast.warning(w))
 
-      // Load styles from new session
       const sessionId   = data.session_id!
       const sessionName = data.session_name!
       const stylesRes = await fetch(`/api/sessions/${sessionId}/styles`)
@@ -77,8 +85,8 @@ export function ExcelUpload({ onClose }: Props) {
       setCurrentSession({ id: sessionId, name: sessionName, base_date: baseDate, created_by: null, created_at: new Date().toISOString() })
       setSessions([{ id: sessionId, name: sessionName, base_date: baseDate, created_by: null, created_at: new Date().toISOString() }, ...sessions])
       onClose()
-    } catch {
-      toast.error('네트워크 오류가 발생했습니다.')
+    } catch (err) {
+      toast.error(`오류: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setUploading(false)
     }
@@ -161,7 +169,7 @@ export function ExcelUpload({ onClose }: Props) {
       <div className="flex gap-2 justify-end pt-2">
         <Button type="button" variant="outline" size="sm" onClick={onClose}>취소</Button>
         <Button type="submit" size="sm" disabled={!file || uploading}>
-          {uploading ? '업로드 중...' : '업로드'}
+          {uploading ? '분석 중...' : '업로드'}
         </Button>
       </div>
     </form>
