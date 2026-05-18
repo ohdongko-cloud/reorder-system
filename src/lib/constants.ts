@@ -59,11 +59,20 @@ export const STRATEGY_W_DELTA: Record<number, number> = {
 }
 
 export const STRATEGY_LABELS: Record<number, string> = {
-  1: '보수적',
-  2: '소극적',
-  3: '표준',
-  4: '적극적',
-  5: '공격적',
+  1: '매우 보수',
+  2: '보수',
+  3: '중간',
+  4: '공격',
+  5: '매우 공격',
+}
+
+// 발주 성향 버튼 색상 (PRD §2-2 기준)
+export const STRATEGY_COLORS: Record<number, string> = {
+  1: '#1d4ed8',
+  2: '#3b82f6',
+  3: '#059669',
+  4: '#d97706',
+  5: '#dc2626',
 }
 
 export const STYLE_TYPE_LABELS: Record<StyleType, string> = {

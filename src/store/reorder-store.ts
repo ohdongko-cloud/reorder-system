@@ -23,6 +23,7 @@ interface ReorderState {
   ) => void
 
   setStyleStrategy: (styleId: string, strategy: Strategy) => void
+  setAllStrategies: (strategy: Strategy) => void
 
   recalcStyle: (styleId: string) => void
   recalcAll: () => void
@@ -97,6 +98,15 @@ export const useReorderStore = create<ReorderState>((set, get) => ({
       })
       return { styles }
     })
+  },
+
+  setAllStrategies: (strategy) => {
+    set(state => ({
+      styles: state.styles.map(style => {
+        const updated = { ...style, strategy }
+        return { ...updated, colors: updated.colors.map(c => recalcColor(c, updated)) }
+      }),
+    }))
   },
 
   recalcStyle: (styleId) => {
