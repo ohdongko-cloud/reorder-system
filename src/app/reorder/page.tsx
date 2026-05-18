@@ -10,6 +10,7 @@ import { StyleSearchPage } from '@/components/reorder/pages/StyleSearchPage'
 import { DataUploadPage } from '@/components/reorder/pages/DataUploadPage'
 import { HistoryPage } from '@/components/reorder/pages/HistoryPage'
 import { CarryoverListPage } from '@/components/reorder/pages/CarryoverListPage'
+import { MdGroupPage } from '@/components/reorder/pages/MdGroupPage'
 import { useReorderStore } from '@/store/reorder-store'
 import { getWeekRange } from '@/lib/constants'
 import { RefreshCw, LogOut } from 'lucide-react'
@@ -72,6 +73,7 @@ export default function ReorderPage() {
             {page === 'upload'     && <DataUploadPage onNavigate={setPage} />}
             {page === 'history'    && <HistoryPage />}
             {page === 'carryover'  && <CarryoverListPage />}
+            {page === 'md_group'   && <MdGroupPage />}
           </main>
         )}
       </div>
@@ -87,6 +89,7 @@ function PageTitle({ page }: { page: PageKey }) {
     upload:     '데이터 업로드',
     history:    '리오더 이력',
     carryover:  '캐리오버 리스트 관리',
+    md_group:   'MD별 모아보기',
   }
   return <span className="text-sm font-semibold text-slate-800">{labels[page]}</span>
 }

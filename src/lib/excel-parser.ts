@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx'
-import type { StyleRow, ColorRow, PlcStage } from '@/types/reorder'
+import type { StyleRow, ColorRow, PlcStage, Strategy } from '@/types/reorder'
 import { inferStyleType, inferPlc, inferBadges } from '@/lib/constants'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -161,10 +161,11 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
         l: c.l,
         m: c.m,
         n,
-        r: 5,    // 재고조정 배수 기본값 (MD 조정 가능)
-        s: 8,    // 판매기간 기본값 (MD 조정 가능)
-        t: 1.0,  // T값 기본값 (MD 조정 가능)
+        r: 5,
+        s: 8,
+        t: 1.0,
         weight: 1.0,
+        strategy: 3 as Strategy,
         aj,
       }
     })
@@ -299,7 +300,7 @@ function parseFromCheckSheet(wb: XLSX.WorkBook): ParseResult {
       style_id: '',
       color_name: `컬러${(styleMap.get(lastStyleCode)?.colors.length ?? 0) + 1}`,
       color_hex: null,
-      k: 0, l: 0, m: 0, n, r, s, t, weight: 1.0, aj,
+      k: 0, l: 0, m: 0, n, r, s, t, weight: 1.0, strategy: 3 as Strategy, aj,
     }
 
     if (!styleMap.has(lastStyleCode)) {

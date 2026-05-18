@@ -8,9 +8,10 @@ import {
   Upload,
   History,
   BookMarked,
+  Users,
 } from 'lucide-react'
 
-export type PageKey = 'dashboard' | 'results' | 'search' | 'upload' | 'history' | 'carryover'
+export type PageKey = 'dashboard' | 'results' | 'search' | 'upload' | 'history' | 'carryover' | 'md_group'
 
 interface Props {
   current: PageKey
@@ -24,6 +25,7 @@ const NAV_ITEMS: { key: PageKey; label: string; icon: React.ElementType; indent?
   { key: 'upload',     label: '데이터 업로드',     icon: Upload },
   { key: 'history',    label: '리오더 이력',       icon: History },
   { key: 'carryover',  label: '캐리오버 리스트 관리', icon: BookMarked, indent: true },
+  { key: 'md_group',   label: 'MD별 모아보기',      icon: Users },
 ]
 
 export function Sidebar({ current, onChange }: Props) {

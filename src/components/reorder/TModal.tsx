@@ -191,6 +191,7 @@ export function TModal({ open, onClose, color, style }: Props) {
   const [localT, setLocalT] = useState(color.t)
   const [localS, setLocalS] = useState(color.s)
   const [localR, setLocalR] = useState(color.r)
+  const [localW, setLocalW] = useState(color.weight ?? 1.0)
   const [selectedCode, setSelectedCode] = useState<string | null>(null)
   const [directCode, setDirectCode] = useState('')
 
@@ -199,10 +200,11 @@ export function TModal({ open, onClose, color, style }: Props) {
       setLocalT(color.t)
       setLocalS(color.s)
       setLocalR(color.r)
+      setLocalW(color.weight ?? 1.0)
       setSelectedCode(null)
       setDirectCode('')
     }
-  }, [open, color.t, color.s, color.r])
+  }, [open, color.t, color.s, color.r, color.weight])
 
   const similar = useSimilarStyles(style)
 
@@ -230,6 +232,7 @@ export function TModal({ open, onClose, color, style }: Props) {
     updateColorField(style.id, color.id, 't', localT)
     updateColorField(style.id, color.id, 's', localS)
     updateColorField(style.id, color.id, 'r', localR)
+    updateColorField(style.id, color.id, 'weight', localW)
     onClose()
   }
 
@@ -245,7 +248,7 @@ export function TModal({ open, onClose, color, style }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
-      <DialogContent className="max-w-[880px] w-[96vw] p-0 overflow-hidden">
+      <DialogContent className="max-w-[1760px] w-[96vw] p-0 overflow-hidden">
         <DialogHeader className="px-5 pt-4 pb-3 border-b border-slate-100">
           <DialogTitle className="text-sm flex items-center gap-2">
             <span>📅 전년 유사상품 선택</span>
@@ -294,6 +297,15 @@ export function TModal({ open, onClose, color, style }: Props) {
                   display={localR.toFixed(1) + 'x'}
                   onChange={setLocalR}
                   ticks={['0.5x', '1.0x', '1.5x', '2.0x', '2.5x', '3.0x']}
+                />
+                <SliderField
+                  label="W · 발주 가중치"
+                  sub="발주 수량 조정 계수"
+                  value={localW}
+                  min={1.0} max={2.0} step={0.1}
+                  display={localW.toFixed(1) + 'x'}
+                  onChange={setLocalW}
+                  ticks={['1.0x', '1.3x', '1.5x', '1.7x', '2.0x']}
                 />
               </div>
             </div>

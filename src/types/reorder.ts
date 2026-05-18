@@ -18,6 +18,7 @@ export interface ColorRow {
   s: number   // 판매기간 (주) — default 5
   t: number   // T값 (입고후주판량비율 배수)
   weight: number  // 가중치 (default 1.0, range 1.0~2.0)
+  strategy: Strategy  // 발주성향 per-color (default 3)
   // 확정발주
   aj: number
   // Computed (client-side)

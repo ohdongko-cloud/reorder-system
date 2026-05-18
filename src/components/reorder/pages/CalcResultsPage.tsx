@@ -3,7 +3,6 @@
 import { useCallback, useState, useMemo } from 'react'
 import { useReorderStore } from '@/store/reorder-store'
 import { InlineNumberInput } from '../InlineNumberInput'
-import { StrategySelector } from '../StrategySelector'
 import { TModal } from '../TModal'
 import {
   STRATEGY_LABELS, STRATEGY_COLORS, MIN_RECOMMEND_QTY,
@@ -13,9 +12,16 @@ import {
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { CheckCircle, X, Copy, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
-import type { ColorRow, StyleRow, PlcStage, Strategy, StyleBadge } from '@/types/reorder'
+import type { ColorRow, StyleRow, Strategy, StyleBadge } from '@/types/reorder'
 
 const GOTHIC = "'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif"
+
+// ── 헤더 배경색 (HTML 레퍼런스 기준) ──────────────────────────
+const TH_BASE   = '#1e293b'   // 기본 th
+const TH_GROUP  = '#0f172a'   // 그룹 헤더
+const TH_OLD    = '#334155'   // 기존 로직
+const TH_NEW    = '#1e3a5f'   // 신규 로직
+const TH_AJ     = '#064e3b'   // MD 확정
 
 function fmt(n: number | null | undefined) {
   if (n == null) return '—'
@@ -24,51 +30,57 @@ function fmt(n: number | null | undefined) {
 
 interface TModalState { open: boolean; color: ColorRow | null; style: StyleRow | null }
 const STRATEGY_LEVELS: Strategy[] = [1, 2, 3, 4, 5]
-const WEIGHT_OPTIONS = Array.from({ length: 11 }, (_, i) => parseFloat((1.0 + i * 0.1).toFixed(1)))
 
-// ── 스타일별 집계값 (정렬용)
+// ── 스타일별 집계값 (정렬용) ──────────────────────────────────
 function styleAgg(style: StyleRow) {
-  let sumL = 0, sumM = 0, sumN = 0, sumStock = 0, sumOld = 0, sumNew = 0
+  let sumN = 0, sumStock = 0, sumOld = 0, sumNew = 0, sumAj = 0
   for (const c of style.colors) {
-    sumL += c.l; sumM += c.m; sumN += c.n
-    sumStock += (c.l - c.m)
+    sumN += c.n
+    sumStock += Math.max(0, c.l - c.m)
     sumOld += c.calcOld ?? 0
     sumNew += c.calcNew ?? 0
+    sumAj  += c.aj
   }
   return {
-    sumL,
-    soreal: sumL > 0 ? sumM / sumL : 0,
     sumN,
     qPct: sumStock > 0 ? sumN / sumStock : 0,
     sumStock,
     sumOld,
     sumNew,
+    sumAj,
   }
 }
 
-// ── 상태 배지 자동 산출
+// ── 상태 배지 ────────────────────────────────────────────────
 interface StatusBadge { label: string; cls: string }
 function getStatusBadges(style: StyleRow): StatusBadge[] {
   const result: StatusBadge[] = []
   const agg = styleAgg(style)
 
-  // 고회전: 어느 컬러든 주판율 10% 이상
   const anyHigh = style.colors.some(c => {
     const stock = c.l - c.m
     return stock > 0 && c.n / stock * 100 >= 10
   })
   if (anyHigh) result.push({ label: '고회전', cls: 'bg-orange-100 text-orange-800 border-orange-300' })
-
-  // 시즌종료: 쇠퇴기
   if (style.plc === '쇠퇴기') result.push({ label: '시즌종료', cls: 'bg-red-100 text-red-700 border-red-200' })
 
-  // 저소진 위험: 경과 50일 이상인데 소진율 40% 미만
-  const soreal = agg.soreal * 100
-  if (style.days_since_inbound >= 50 && soreal < 40 && agg.sumL > 0) {
+  const totalL = style.colors.reduce((a, c) => a + c.l, 0)
+  const totalM = style.colors.reduce((a, c) => a + c.m, 0)
+  const soreal = totalL > 0 ? totalM / totalL * 100 : 0
+  if (style.days_since_inbound >= 50 && soreal < 40 && totalL > 0) {
     result.push({ label: '저소진', cls: 'bg-yellow-100 text-yellow-800 border-yellow-300' })
   }
-
   return result
+}
+
+// ── 위험 도트 계산 ──────────────────────────────────────────
+type RiskLevel = 'none' | 'caution' | 'danger'
+function getRisk(color: ColorRow): RiskLevel {
+  if (color.aj <= 0 || color.calcNew == null || color.calcNew <= 0) return 'none'
+  const ratio = color.aj / color.calcNew
+  if (ratio > 1.5 || ratio < 0.5) return 'danger'
+  if (ratio > 1.2 || ratio < 0.8) return 'caution'
+  return 'none'
 }
 
 export function CalcResultsPage() {
@@ -95,16 +107,12 @@ export function CalcResultsPage() {
 
   function toggleSort(field: string) {
     setSortField(prev => {
-      if (prev === field) {
-        setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-        return field
-      }
+      if (prev === field) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); return field }
       setSortDir('asc')
       return field
     })
   }
 
-  // 필터용 고유값
   const uniqueYears = useMemo(() => {
     const s = new Set<string>()
     styles.forEach(st => { const { year } = parseStyleCode(st.code); if (year) s.add(String(year)) })
@@ -117,68 +125,71 @@ export function CalcResultsPage() {
     return Array.from(s).sort()
   }, [styles])
 
-  // 필터링
   const filteredStyles = useMemo(() => {
     return styles.filter(style => {
       const { year, season, item } = parseStyleCode(style.code)
-      if (yearFilter   !== 'all' && String(year)   !== yearFilter)              return false
-      if (seasonFilter !== 'all' && String(season) !== seasonFilter)             return false
+      if (yearFilter   !== 'all' && String(year)   !== yearFilter) return false
+      if (seasonFilter !== 'all' && String(season) !== seasonFilter) return false
       if (badgeFilter  !== 'all' && !style.badges.includes(badgeFilter as StyleBadge)) return false
-      if (itemFilter   !== 'all' && item !== itemFilter)                         return false
+      if (itemFilter   !== 'all' && item !== itemFilter) return false
       if (qtyFilter    === '300+' && !style.colors.some(c => (c.calcNew ?? 0) >= MIN_RECOMMEND_QTY)) return false
       return true
     })
   }, [styles, yearFilter, seasonFilter, badgeFilter, itemFilter, qtyFilter])
 
-  // 정렬
   const sortedStyles = useMemo(() => {
     if (!sortField) return filteredStyles
     return [...filteredStyles].sort((a, b) => {
       const av = styleAgg(a), bv = styleAgg(b)
       let diff = 0
       if (sortField === 'code')      diff = a.code.localeCompare(b.code)
-      else if (sortField === 'sumL') diff = av.sumL - bv.sumL
-      else if (sortField === 'soreal') diff = av.soreal - bv.soreal
       else if (sortField === 'sumN') diff = av.sumN - bv.sumN
       else if (sortField === 'qPct') diff = av.qPct - bv.qPct
       else if (sortField === 'sumStock') diff = av.sumStock - bv.sumStock
       else if (sortField === 'sumOld') diff = av.sumOld - bv.sumOld
       else if (sortField === 'sumNew') diff = av.sumNew - bv.sumNew
+      else if (sortField === 'sumAj')  diff = av.sumAj  - bv.sumAj
       return sortDir === 'asc' ? diff : -diff
     })
   }, [filteredStyles, sortField, sortDir])
 
   // 집계
-  let totalOld = 0, totalNew = 0, totalL = 0, totalM = 0, totalN = 0, totalStock = 0, totalColors = 0
+  let totalOld = 0, totalNew = 0, totalAj = 0, totalN = 0, totalStock = 0, totalColors = 0
   for (const style of sortedStyles) {
     for (const c of style.colors) {
-      totalOld   += c.calcOld ?? 0; totalNew += c.calcNew ?? 0
-      totalL += c.l; totalM += c.m; totalN += c.n
-      totalStock += (c.l - c.m); totalColors++
+      totalOld   += c.calcOld ?? 0
+      totalNew   += c.calcNew ?? 0
+      totalAj    += c.aj
+      totalN     += c.n
+      totalStock += Math.max(0, c.l - c.m)
+      totalColors++
     }
   }
 
+  // 전체 성향 (모든 컬러가 동일 성향일 때 활성)
   const globalStrategy: Strategy | null = useMemo(() => {
     if (styles.length === 0) return 3
-    const first = styles[0].strategy
-    return styles.every(s => s.strategy === first) ? first : null
+    const all = styles.flatMap(s => s.colors.map(c => c.strategy ?? s.strategy))
+    if (all.length === 0) return 3
+    const first = all[0]
+    return all.every(v => v === first) ? first as Strategy : null
   }, [styles])
 
   const update = useCallback(
-    (styleId: string, colorId: string, field: 'n' | 's' | 't' | 'r' | 'aj' | 'weight', value: number) =>
+    (styleId: string, colorId: string, field: 'n' | 's' | 't' | 'r' | 'aj' | 'weight' | 'strategy', value: number) =>
       updateColorField(styleId, colorId, field, value),
     [updateColorField]
   )
 
   function handleExcelCopy() {
-    const header = ['스타일', '컬러', 'PLC', '누적입량', '소진율%', '분배매장', '주판량', '주판율%', '원가율', '현재재고', '생산정보', '판매기간', '가중치', '기존제안', '신규제안']
+    const header = ['스타일', '컬러', 'PLC', '주판량', '주판율%', '현재재고', '발주성향', '기존제안', '신규제안', 'MD확정']
     const rows = [header]
     for (const style of sortedStyles) {
       for (const c of style.colors) {
-        const stock  = c.l - c.m
-        const soreal = c.l > 0 ? (c.m / c.l * 100).toFixed(1) : ''
-        const qPct   = stock > 0 ? (c.n / stock * 100).toFixed(1) : ''
-        rows.push([style.code, c.color_name, style.plc, String(c.l), soreal, '—', String(c.n), qPct, '—', String(stock), '—', String(c.s), c.weight.toFixed(1) + 'x', String(c.calcOld ?? ''), String(c.calcNew ?? '')])
+        const stock = Math.max(0, c.l - c.m)
+        const qPct  = stock > 0 ? (c.n / stock * 100).toFixed(1) : ''
+        rows.push([style.code, c.color_name, style.plc, String(c.n), qPct, String(stock),
+          String(c.strategy ?? style.strategy), String(c.calcOld ?? ''), String(c.calcNew ?? ''), String(c.aj || '')])
       }
     }
     navigator.clipboard.writeText(rows.map(r => r.join('\t')).join('\n'))
@@ -201,7 +212,7 @@ export function CalcResultsPage() {
   return (
     <div className="flex flex-col flex-1 min-h-0" style={{ fontFamily: GOTHIC }}>
 
-      {/* 헤더 */}
+      {/* ── 상단 타이틀 바 ── */}
       <div className="bg-white border-b border-slate-200 px-4 py-2.5 flex items-center justify-between shrink-0">
         <div>
           <div className="text-base font-bold text-slate-800">계산 결과</div>
@@ -211,38 +222,41 @@ export function CalcResultsPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={handleExcelCopy} className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-slate-300 text-sm text-slate-600 hover:bg-slate-50 transition-colors">
+          <button onClick={handleExcelCopy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-slate-300 text-sm text-slate-600 hover:bg-slate-50 transition-colors">
             <Copy className="w-3.5 h-3.5" />엑셀 복사
           </button>
-          <button onClick={() => setConfirmModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm font-semibold rounded hover:bg-blue-700 transition-colors">
+          <button onClick={() => setConfirmModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm font-semibold rounded hover:bg-blue-700 transition-colors">
             <CheckCircle className="w-3.5 h-3.5" />발주 확정
           </button>
         </div>
       </div>
 
-      {/* 전략 바 */}
-      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex items-center gap-2 shrink-0">
-        <span className="text-sm text-slate-500 font-semibold shrink-0">스타일별 발주 성향</span>
-        <div className="flex items-center gap-1">
+      {/* ── 전략 바 — 세그먼트 컨트롤 ── */}
+      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex items-center gap-3 shrink-0">
+        <span className="text-xs text-slate-500 font-semibold shrink-0">전체 발주성향 일괄설정</span>
+        <div className="inline-flex rounded-md overflow-hidden border border-slate-300 shadow-sm">
           {STRATEGY_LEVELS.map(lv => {
             const isActive = globalStrategy === lv
             const color = STRATEGY_COLORS[lv]
             return (
               <button key={lv} onClick={() => setAllStrategies(lv)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded text-sm font-semibold border transition-all"
-                style={isActive ? { background: color, borderColor: color, color: '#fff' } : { background: '#fff', borderColor: '#e2e8f0', color: '#475569' }}
-              >
-                {isActive && <span className="inline-block w-1.5 h-1.5 rounded-full bg-white opacity-90" />}
-                {STRATEGY_LABELS[lv]}{lv === 3 ? ' 기본값' : ''}
+                className="px-3 py-1.5 text-xs font-semibold border-r border-slate-300 last:border-r-0 transition-colors"
+                style={isActive
+                  ? { background: color, color: '#fff', borderColor: color }
+                  : { background: '#fff', color: '#64748b' }}>
+                {STRATEGY_LABELS[lv]}
               </button>
             )
           })}
         </div>
+        <span className="text-xs text-slate-400">개별 컬러는 테이블 내 드롭다운으로 조정</span>
       </div>
 
-      {/* 필터 바 */}
-      <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-2 shrink-0 flex-wrap">
-        <span className="text-sm text-slate-500 font-semibold shrink-0">필터</span>
+      {/* ── 필터 바 ── */}
+      <div className="bg-white border-b border-slate-200 px-4 py-1.5 flex items-center gap-2 shrink-0 flex-wrap">
+        <span className="text-xs text-slate-500 font-semibold shrink-0">필터</span>
         <Fsel label="연도" value={yearFilter} onChange={setYearFilter}>
           <option value="all">전체 연도</option>
           {uniqueYears.map(y => <option key={y} value={y}>{y}</option>)}
@@ -275,7 +289,7 @@ export function CalcResultsPage() {
         </div>
       </div>
 
-      {/* 테이블 */}
+      {/* ── 테이블 ── */}
       {sortedStyles.length === 0 ? (
         <div className="flex flex-col items-center justify-center flex-1 text-slate-400 py-16">
           <div className="text-3xl mb-2">🔍</div>
@@ -285,111 +299,122 @@ export function CalcResultsPage() {
         </div>
       ) : (
         <div className="flex-1 overflow-auto">
-          <table className="border-collapse bg-white text-sm" style={{ minWidth: 1480 }}>
+          <table className="border-collapse bg-white text-sm w-full" style={{ minWidth: 1040 }}>
             <colgroup>
-              <col style={{ width: 230 }} />{/* 스타일 */}
+              <col style={{ width: 200 }} />{/* 스타일 */}
               <col style={{ width: 100 }} />{/* 컬러 */}
-              {/* 판매 현황 7 */}
-              <col style={{ width: 78 }} />
-              <col style={{ width: 70 }} />
-              <col style={{ width: 68 }} />
-              <col style={{ width: 78 }} />
-              <col style={{ width: 68 }} />
-              <col style={{ width: 68 }} />
-              <col style={{ width: 78 }} />
-              {/* 생산정보 1 */}
-              <col style={{ width: 85 }} />
-              {/* 발주설정 3 */}
-              <col style={{ width: 92 }} />
-              <col style={{ width: 78 }} />
-              <col style={{ width: 78 }} />
-              {/* 기존로직 1 */}
-              <col style={{ width: 92 }} />
-              {/* 신규로직 1 */}
-              <col style={{ width: 110 }} />
+              <col style={{ width: 56 }} />{/* PLC */}
+              <col style={{ width: 80 }} />{/* 주판량 */}
+              <col style={{ width: 70 }} />{/* 주판율 */}
+              <col style={{ width: 80 }} />{/* 현재재고 */}
+              <col style={{ width: 90 }} />{/* 발주성향 */}
+              <col style={{ width: 88 }} />{/* 전년T */}
+              <col style={{ width: 90 }} />{/* 기존로직 */}
+              <col style={{ width: 100 }} />{/* 신규로직 */}
+              <col style={{ width: 90 }} />{/* MD확정발주 */}
+              <col style={{ width: 48 }} />{/* 위험 */}
             </colgroup>
 
             <thead className="sticky top-0 z-20">
-              <tr className="text-white text-sm">
-                <th rowSpan={2} className="px-3 py-2 text-left align-bottom bg-slate-800 border-r border-slate-600">
-                  스타일
+              {/* ── 그룹 헤더 행 ── */}
+              <tr style={{ color: '#e2e8f0', fontSize: 11 }}>
+                <th rowSpan={2} className="px-3 py-2 text-left align-bottom border-r border-slate-600"
+                  style={{ background: TH_BASE }}>
+                  상품
                   <SortIcon field="code" current={sortField} dir={sortDir} onClick={toggleSort} />
                 </th>
-                <th rowSpan={2} className="px-2 py-2 text-left align-bottom bg-slate-800">컬러</th>
-                <th colSpan={7} className="px-2 pt-2 pb-1 text-center font-bold bg-slate-700 border-l-2 border-slate-600">판매 현황</th>
-                <th colSpan={1} className="px-2 pt-2 pb-1 text-center font-bold bg-slate-600 border-l-2 border-slate-500">생산 정보</th>
-                <th colSpan={3} className="px-2 pt-2 pb-1 text-center font-bold bg-slate-500 border-l-2 border-slate-400">발주 설정</th>
-                <th colSpan={1} className="px-2 pt-2 pb-1 text-center font-bold border-l-2 border-slate-600" style={{ background: '#334155' }}>기존 로직</th>
-                <th colSpan={1} className="px-2 pt-2 pb-1 text-center font-bold border-l-2 border-slate-700" style={{ background: '#1e3a5f' }}>신규 로직 (PLC 보정)</th>
-              </tr>
-              <tr className="text-slate-200 text-xs">
+                <th rowSpan={2} className="px-2 py-2 text-left align-bottom border-r border-slate-600"
+                  style={{ background: TH_BASE }}>컬러</th>
+                <th rowSpan={2} className="px-1 py-2 text-center align-bottom border-r border-slate-600"
+                  style={{ background: TH_BASE }}>PLC</th>
                 {/* 판매 현황 */}
-                <ColTh bg="bg-slate-700" border field="sumL" sortField={sortField} sortDir={sortDir} onSort={toggleSort}>누적입량<Tip t="누적 입고 수량" /></ColTh>
-                <ColTh bg="bg-slate-700" field="soreal" sortField={sortField} sortDir={sortDir} onSort={toggleSort}>소진율<Tip t="누적판매 ÷ 누적입고 × 100%" /></ColTh>
-                <th className="px-1 pb-1.5 text-center bg-slate-700">분배매장<Tip t="현재 분배 매장 수" /></th>
-                <ColTh bg="bg-slate-700" field="sumN" sortField={sortField} sortDir={sortDir} onSort={toggleSort}>주판량<Tip t="주간 평균 판매량 (수정 가능)" /></ColTh>
-                <ColTh bg="bg-slate-700" field="qPct" sortField={sortField} sortDir={sortDir} onSort={toggleSort}>주판율<Tip t="주판량 ÷ 현재재고 × 100%. 10%↑ 빨강" /></ColTh>
-                <th className="px-1 pb-1.5 text-center bg-slate-700">원가율<Tip t="원가 / 정가 비율" /></th>
-                <ColTh bg="bg-slate-700" field="sumStock" sortField={sortField} sortDir={sortDir} onSort={toggleSort}>현재재고<Tip t="입고 - 누적판매" /></ColTh>
-                {/* 생산정보 */}
-                <th className="px-1 pb-1.5 text-center bg-slate-600 border-l-2 border-slate-500">생산정보</th>
-                {/* 발주설정 */}
-                <th className="px-1 pb-1.5 text-center bg-slate-500 border-l-2 border-slate-400">전년/T<Tip t="전년 유사상품 선택 → T값 반영" /></th>
-                <th className="px-1 pb-1.5 text-center bg-slate-500">판매기간<Tip t="잔여 판매 기간(주). 기본 5주" /></th>
-                <th className="px-1 pb-1.5 text-center bg-slate-500">가중치<Tip t="발주 수량 조정 계수. 기본 1.0배" /></th>
-                {/* 기존로직 */}
-                <ColTh field="sumOld" sortField={sortField} sortDir={sortDir} onSort={toggleSort}
-                  className="border-l-2 border-slate-600" style={{ background: '#334155' }}>
-                  제안수량<Tip t="W=0.3 고정 기존 로직 (pcs)" />
-                </ColTh>
-                {/* 신규로직 */}
-                <ColTh field="sumNew" sortField={sortField} sortDir={sortDir} onSort={toggleSort}
-                  className="border-l-2 border-slate-700" style={{ background: '#1e3a5f' }}>
-                  제안수량<Tip t="PLC 보정 신규 로직 (pcs). % = 기존 대비" />
-                </ColTh>
+                <th colSpan={3} className="px-2 pt-1.5 pb-0.5 text-center font-bold border-r border-slate-600"
+                  style={{ background: TH_GROUP }}>판매 현황</th>
+                {/* 발주 설정 */}
+                <th colSpan={2} className="px-2 pt-1.5 pb-0.5 text-center font-bold border-r border-slate-600"
+                  style={{ background: TH_GROUP }}>발주 설정</th>
+                {/* 기존 */}
+                <th rowSpan={2} className="px-2 py-2 text-center align-bottom border-r border-slate-600"
+                  style={{ background: TH_OLD }}>
+                  <ColSort field="sumOld" current={sortField} dir={sortDir} onClick={toggleSort}>기존 로직</ColSort>
+                </th>
+                {/* 신규 */}
+                <th rowSpan={2} className="px-2 py-2 text-center align-bottom border-r border-slate-600"
+                  style={{ background: TH_NEW }}>
+                  <ColSort field="sumNew" current={sortField} dir={sortDir} onClick={toggleSort}>신규 로직</ColSort>
+                </th>
+                {/* MD 확정 */}
+                <th colSpan={2} className="px-2 pt-1.5 pb-0.5 text-center font-bold"
+                  style={{ background: TH_AJ }}>MD 확정</th>
               </tr>
-              <tr><td colSpan={15} className="p-0 h-0.5 bg-slate-900" /></tr>
+
+              {/* ── 서브 헤더 행 ── */}
+              <tr style={{ color: '#cbd5e1', fontSize: 10 }}>
+                {/* 판매현황 서브 */}
+                <th className="px-1 pb-1.5 text-center border-r border-slate-600" style={{ background: TH_GROUP }}>
+                  <ColSort field="sumN" current={sortField} dir={sortDir} onClick={toggleSort}>주판량</ColSort>
+                </th>
+                <th className="px-1 pb-1.5 text-center border-r border-slate-600" style={{ background: TH_GROUP }}>
+                  <ColSort field="qPct" current={sortField} dir={sortDir} onClick={toggleSort}>주판율</ColSort>
+                </th>
+                <th className="px-1 pb-1.5 text-center border-r border-slate-600" style={{ background: TH_GROUP }}>
+                  <ColSort field="sumStock" current={sortField} dir={sortDir} onClick={toggleSort}>현재재고</ColSort>
+                </th>
+                {/* 발주설정 서브 */}
+                <th className="px-1 pb-1.5 text-center border-r border-slate-600" style={{ background: TH_GROUP }}>발주성향</th>
+                <th className="px-1 pb-1.5 text-center border-r border-slate-600" style={{ background: TH_GROUP }}>전년 T값</th>
+                {/* MD확정 서브 */}
+                <th className="px-1 pb-1.5 text-center border-r border-slate-600" style={{ background: TH_AJ }}>
+                  <ColSort field="sumAj" current={sortField} dir={sortDir} onClick={toggleSort}>확정발주</ColSort>
+                </th>
+                <th className="px-1 pb-1.5 text-center" style={{ background: TH_AJ }}>위험</th>
+              </tr>
+
+              {/* ── 구분선 ── */}
+              <tr><td colSpan={12} className="p-0 h-0.5 bg-slate-900" /></tr>
             </thead>
 
             <tbody>
               {sortedStyles.map(style => (
-                <StyleRows key={style.id} style={style} onTModal={(c, s) => setTModal({ open: true, color: c, style: s })} onUpdate={update} />
+                <StyleRows key={style.id} style={style}
+                  onTModal={(c, s) => setTModal({ open: true, color: c, style: s })}
+                  onUpdate={update} />
               ))}
-              <GrandTotalRow styles={sortedStyles} totalL={totalL} totalM={totalM} totalN={totalN} totalStock={totalStock} totalOld={totalOld} totalNew={totalNew} />
+              <GrandTotalRow
+                styles={sortedStyles}
+                totalN={totalN} totalStock={totalStock}
+                totalOld={totalOld} totalNew={totalNew} totalAj={totalAj} />
             </tbody>
           </table>
         </div>
       )}
 
-      {/* 하단 서머리 */}
-      <div className="bg-slate-900 text-white px-4 py-2.5 flex items-center gap-6 text-sm shrink-0">
-        <span className="text-slate-400 font-medium shrink-0">스타일: {sortedStyles.length}개</span>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="w-2 h-2 rounded-full bg-slate-400" />
-          <span className="text-slate-400">기존 로직:</span>
-          <span className="font-bold tabular-nums">{totalOld.toLocaleString()} pcs</span>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="w-2 h-2 rounded-full bg-blue-400" />
-          <span className="text-slate-400">신규 로직:</span>
-          <span className="font-bold text-blue-400 tabular-nums">{totalNew.toLocaleString()} pcs</span>
+      {/* ── 하단 서머리 바 ── */}
+      <div className="bg-slate-900 text-white px-4 py-2 flex items-center gap-5 text-xs shrink-0">
+        <span className="text-slate-400 font-medium shrink-0">스타일 {sortedStyles.length}개</span>
+        <SummaryItem label="기존 로직 합계" value={`${totalOld.toLocaleString()} pcs`} cls="text-slate-200" />
+        <SummaryItem label="신규 로직 합계" value={`${totalNew.toLocaleString()} pcs`} cls="text-blue-300 font-bold">
           {totalOld > 0 && (
-            <span className={cn('text-xs tabular-nums', totalNew > totalOld ? 'text-red-400' : 'text-blue-400')}>
+            <span className={cn('ml-1', totalNew > totalOld ? 'text-red-400' : 'text-blue-400')}>
               ({totalNew > totalOld ? '▲' : '▼'}{Math.abs((totalNew - totalOld) / totalOld * 100).toFixed(1)}%)
             </span>
           )}
-        </div>
-        <button className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm transition-colors shrink-0">
+        </SummaryItem>
+        <SummaryItem label="MD 확정 합계" value={totalAj > 0 ? `${totalAj.toLocaleString()} pcs` : '—'} cls="text-emerald-300 font-bold" />
+        <button
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold transition-colors shrink-0">
           💾 저장
         </button>
       </div>
 
-      {/* TModal */}
+      {/* ── TModal ── */}
       {tModal.open && tModal.color && tModal.style && (
-        <TModal open={tModal.open} onClose={() => setTModal({ open: false, color: null, style: null })} color={tModal.color} style={tModal.style} />
+        <TModal open={tModal.open}
+          onClose={() => setTModal({ open: false, color: null, style: null })}
+          color={tModal.color} style={tModal.style} />
       )}
 
-      {/* 발주 확정 모달 */}
+      {/* ── 발주 확정 모달 ── */}
       {confirmModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
           <div className="bg-white rounded-xl shadow-xl w-80 p-6" style={{ fontFamily: GOTHIC }}>
@@ -398,13 +423,30 @@ export function CalcResultsPage() {
               <button onClick={() => setConfirmModal(false)}><X className="w-4 h-4 text-slate-400" /></button>
             </div>
             <div className="bg-slate-50 rounded-lg p-3 mb-4 space-y-1.5 text-sm">
-              <div className="flex justify-between"><span className="text-slate-500">스타일 수</span><span className="font-semibold">{sortedStyles.length}개</span></div>
-              <div className="flex justify-between"><span className="text-slate-500">신규 로직 합계</span><span className="font-bold text-blue-700">{totalNew.toLocaleString()} pcs</span></div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">스타일 수</span>
+                <span className="font-semibold">{sortedStyles.length}개</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">신규 로직 합계</span>
+                <span className="font-bold text-blue-700">{totalNew.toLocaleString()} pcs</span>
+              </div>
+              {totalAj > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">MD 확정 합계</span>
+                  <span className="font-bold text-emerald-700">{totalAj.toLocaleString()} pcs</span>
+                </div>
+              )}
             </div>
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setConfirmModal(false)} className="px-4 py-1.5 rounded border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">취소</button>
-              <button onClick={() => { setConfirmModal(false); toast.success('발주가 확정되었습니다.', { description: `총 ${totalNew.toLocaleString()} pcs · ${sortedStyles.length}개 스타일` }) }}
-                className="px-4 py-1.5 rounded bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">확정</button>
+              <button onClick={() => setConfirmModal(false)}
+                className="px-4 py-1.5 rounded border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">취소</button>
+              <button onClick={() => {
+                setConfirmModal(false)
+                toast.success('발주가 확정되었습니다.', {
+                  description: `총 ${(totalAj > 0 ? totalAj : totalNew).toLocaleString()} pcs · ${sortedStyles.length}개 스타일`
+                })
+              }} className="px-4 py-1.5 rounded bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">확정</button>
             </div>
           </div>
         </div>
@@ -417,7 +459,7 @@ export function CalcResultsPage() {
 function StyleRows({ style, onTModal, onUpdate }: {
   style: StyleRow
   onTModal: (c: ColorRow, s: StyleRow) => void
-  onUpdate: (sid: string, cid: string, f: 'n' | 's' | 't' | 'r' | 'aj' | 'weight', v: number) => void
+  onUpdate: (sid: string, cid: string, f: 'n' | 's' | 't' | 'r' | 'aj' | 'weight' | 'strategy', v: number) => void
 }) {
   const colorCount   = style.colors.length
   const statusBadges = getStatusBadges(style)
@@ -428,9 +470,9 @@ function StyleRows({ style, onTModal, onUpdate }: {
       {style.colors.map((color, ci) => {
         const inactive = color.l === 0
         const { calcOld, calcNew, delta } = color
-        const stock  = color.l - color.m
-        const soreal = color.l > 0 ? color.m / color.l * 100 : null
+        const stock  = Math.max(0, color.l - color.m)
         const qPct   = stock > 0 ? color.n / stock * 100 : null
+        const risk   = getRisk(color)
 
         const qCls = qPct == null ? 'text-slate-400'
           : qPct >= 10 ? 'text-red-600 font-bold'
@@ -443,146 +485,141 @@ function StyleRows({ style, onTModal, onUpdate }: {
           : 'text-slate-400'
 
         return (
-          <tr key={color.id} className={cn('border-b border-slate-100 hover:bg-slate-50/60 transition-colors', inactive && 'opacity-40')}>
+          <tr key={color.id}
+            className={cn('border-b border-slate-100 hover:bg-slate-50/60 transition-colors', inactive && 'opacity-40')}>
 
-            {/* 스타일 셀 */}
+            {/* ── 스타일 셀 (rowSpan) ── */}
             {ci === 0 && (
               <td className="px-2 py-2 align-top border-r border-slate-200 bg-white" rowSpan={colorCount}>
                 <div className="flex gap-2">
-                  {/* 이미지 */}
                   <div className="w-14 h-[72px] shrink-0 border-2 border-dashed border-slate-200 rounded-md flex items-center justify-center text-xs text-slate-300 font-bold bg-slate-50 select-none">
                     IMG
                   </div>
                   <div className="flex-1 min-w-0 space-y-0.5">
-                    {/* 스타일 코드 */}
                     <div className="font-mono text-sm font-bold text-slate-800 leading-tight">{style.code}</div>
-
-                    {/* 파싱 칩: 연도/시즌/아이템 */}
+                    <div className="text-xs text-slate-400 leading-tight truncate">상품명 —</div>
                     <div className="flex items-center gap-1 flex-wrap">
-                      {year  && <span className="text-xs px-1.5 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200 font-semibold leading-5">{year}</span>}
-                      {season && <span className="text-xs px-1.5 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200 font-semibold leading-5">{season}시즌</span>}
-                      {item  && <span className="text-xs px-1.5 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200 font-semibold leading-5">{item}</span>}
+                      {year   && <span className="text-[10px] px-1 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200 font-semibold leading-4">{year}</span>}
+                      {season && <span className="text-[10px] px-1 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200 font-semibold leading-4">{season}시즌</span>}
+                      {item   && <span className="text-[10px] px-1 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200 font-semibold leading-4">{item}</span>}
                     </div>
-
-                    {/* 카테고리 뱃지 */}
                     {style.badges.length > 0 && (
                       <div className="flex gap-1 flex-wrap">
                         {style.badges.map(b => (
-                          <span key={b} className={cn('text-xs px-1.5 py-0 rounded border font-semibold leading-5', STYLE_BADGE_COLORS[b])}>
+                          <span key={b} className={cn('text-[10px] px-1.5 py-0 rounded border font-semibold leading-4', STYLE_BADGE_COLORS[b])}>
                             {STYLE_BADGE_LABELS[b]}
                           </span>
                         ))}
                       </div>
                     )}
-
-                    {/* 상태 배지 */}
                     {statusBadges.length > 0 && (
                       <div className="flex gap-1 flex-wrap">
                         {statusBadges.map((b, i) => (
-                          <span key={i} className={cn('text-xs px-1.5 py-0 rounded border font-semibold leading-5', b.cls)}>
+                          <span key={i} className={cn('text-[10px] px-1.5 py-0 rounded border font-semibold leading-4', b.cls)}>
                             {b.label}
                           </span>
                         ))}
                       </div>
                     )}
-
-                    {/* 가격/일수/매장/담당 */}
-                    <div className="text-xs text-slate-400 leading-tight">
+                    <div className="text-[10px] text-slate-400 leading-tight">
                       ₩{style.price.toLocaleString()} · {style.days_since_inbound}일 · {style.stores}매장 · {colorCount}컬러
                     </div>
-                    <div className="text-xs text-slate-300 leading-tight">담당기획: —</div>
-
-                    {/* 전략 */}
-                    <div className="pt-1 border-t border-slate-100">
-                      <StrategySelector styleId={style.id} strategy={style.strategy} />
-                    </div>
-                    <button onClick={() => onTModal(style.colors[0], style)} className="text-xs text-blue-600 underline hover:text-blue-800">
-                      전년 유사상품 선택
-                    </button>
                   </div>
                 </div>
               </td>
             )}
 
-            {/* 컬러 */}
-            <td className="px-2 py-1.5">
+            {/* ── 컬러 ── */}
+            <td className="px-2 py-1.5 border-r border-slate-100">
               <div className="flex items-center gap-1.5">
-                {color.color_hex && <span className="w-3 h-3 rounded-full border border-black/10 shrink-0" style={{ background: color.color_hex }} />}
-                <span className="text-sm text-slate-700 truncate">{color.color_name}</span>
+                {color.color_hex && (
+                  <span className="w-3 h-3 rounded-full border border-black/10 shrink-0"
+                    style={{ background: color.color_hex }} />
+                )}
+                <span className="text-xs text-slate-700 truncate">{color.color_name}</span>
               </div>
+            </td>
+
+            {/* ── PLC ── */}
+            <td className="px-1 py-1.5 text-center border-r border-slate-100">
               {ci === 0 && <PlcBadge plc={style.plc} />}
             </td>
 
-            {/* 누적입량 */}
-            <td className="px-2 py-1 text-right tabular-nums text-sm text-slate-600 border-l-2 border-slate-100">{fmt(color.l)}</td>
-
-            {/* 소진율 */}
-            <td className={cn('px-2 py-1 text-right tabular-nums text-sm', soreal == null ? 'text-slate-400' : soreal >= 70 ? 'text-emerald-600 font-semibold' : 'text-slate-600')}>
-              {soreal != null ? soreal.toFixed(1) + '%' : '—'}
+            {/* ── 주판량 ── */}
+            <td className="px-1.5 py-1 border-r border-slate-100">
+              <InlineNumberInput value={color.n} onChange={v => onUpdate(style.id, color.id, 'n', v)}
+                min={0} disabled={inactive} />
             </td>
 
-            {/* 분배매장 */}
-            <td className="px-2 py-1 text-center text-xs text-slate-400">—</td>
-
-            {/* 주판량 */}
-            <td className="px-1.5 py-1">
-              <InlineNumberInput value={color.n} onChange={v => onUpdate(style.id, color.id, 'n', v)} min={0} disabled={inactive} />
-            </td>
-
-            {/* 주판율 */}
-            <td className={cn('px-2 py-1 text-right tabular-nums text-sm', qCls)}>
+            {/* ── 주판율 ── */}
+            <td className={cn('px-2 py-1 text-right tabular-nums text-xs border-r border-slate-100', qCls)}>
               {qPct != null ? qPct.toFixed(1) + '%' : '—'}
             </td>
 
-            {/* 원가율 */}
-            <td className="px-2 py-1 text-center text-xs text-slate-400">—</td>
-
-            {/* 현재재고 */}
-            <td className="px-2 py-1 text-right tabular-nums text-sm text-slate-600">{inactive ? '—' : stock.toLocaleString()}</td>
-
-            {/* 생산정보 */}
-            <td className="px-2 py-1 text-center text-xs text-slate-400 border-l-2 border-slate-100">—</td>
-
-            {/* 전년/T */}
-            <td className="px-1.5 py-1 border-l-2 border-slate-200">
-              <button onClick={() => onTModal(color, style)} disabled={inactive}
-                className="w-full px-1.5 py-1 rounded text-xs font-semibold text-white transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                style={{ background: '#334155' }}>
-                전년상품 선택
-              </button>
+            {/* ── 현재재고 ── */}
+            <td className="px-2 py-1 text-right tabular-nums text-xs text-slate-600 border-r border-slate-100">
+              {inactive ? '—' : stock.toLocaleString()}
             </td>
 
-            {/* 판매기간 */}
-            <td className="px-1.5 py-1">
-              <div className="flex items-center gap-1">
-                <InlineNumberInput value={color.s} onChange={v => onUpdate(style.id, color.id, 's', v)} min={1} max={52} disabled={inactive} />
-                <span className="text-xs text-slate-400 shrink-0">주</span>
-              </div>
-            </td>
-
-            {/* 가중치 */}
-            <td className="px-1 py-1">
-              <select value={color.weight ?? 1.0} onChange={e => onUpdate(style.id, color.id, 'weight', parseFloat(e.target.value))} disabled={inactive}
-                className="w-full text-xs border border-slate-200 rounded px-1 py-0.5 text-slate-700 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-40">
-                {WEIGHT_OPTIONS.map(w => <option key={w} value={w}>{w.toFixed(1)}x</option>)}
+            {/* ── 발주성향 dropdown ── */}
+            <td className="px-1.5 py-1 border-r border-slate-100">
+              <select
+                value={color.strategy ?? style.strategy}
+                onChange={e => onUpdate(style.id, color.id, 'strategy', Number(e.target.value))}
+                disabled={inactive}
+                className="w-full text-[10px] border border-slate-200 rounded px-1 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-40"
+                style={{
+                  color: STRATEGY_COLORS[color.strategy ?? style.strategy] ?? '#475569',
+                  fontWeight: 600,
+                }}>
+                {STRATEGY_LEVELS.map(lv => (
+                  <option key={lv} value={lv}>{STRATEGY_LABELS[lv]}</option>
+                ))}
               </select>
             </td>
 
-            {/* 기존로직 */}
-            <td className={cn('px-2 py-1 text-right tabular-nums font-semibold text-sm border-l-2 border-slate-200', inactive ? 'text-slate-300' : 'bg-slate-50 text-slate-600')}>
-              {inactive ? '—' : fmt(calcOld)}
+            {/* ── 전년T 버튼 ── */}
+            <td className="px-1.5 py-1 border-r border-slate-200">
+              <button onClick={() => onTModal(color, style)} disabled={inactive}
+                className="w-full px-1.5 py-1 rounded text-[10px] font-semibold text-white transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                style={{ background: TH_OLD }}>
+                전년상품
+              </button>
             </td>
 
-            {/* 신규로직 */}
-            <td className={cn('px-2 py-1 border-l-2 border-slate-200', !inactive && 'bg-blue-50')}>
+            {/* ── 기존 로직 ── */}
+            <td className="px-2 py-1 text-right tabular-nums border-r border-slate-200"
+              style={{ background: inactive ? undefined : '#f8fafc' }}>
+              <span className={cn('text-sm font-semibold', inactive ? 'text-slate-300' : 'text-slate-600')}>
+                {inactive ? '—' : fmt(calcOld)}
+              </span>
+            </td>
+
+            {/* ── 신규 로직 ── */}
+            <td className="px-2 py-1 border-r border-slate-200"
+              style={{ background: inactive ? undefined : '#eff6ff' }}>
               <div className={cn('text-right tabular-nums font-bold text-sm', inactive ? 'text-slate-300' : 'text-blue-700')}>
                 {inactive ? '—' : fmt(calcNew)}
               </div>
               {!inactive && delta != null && (
-                <div className={cn('text-xs tabular-nums text-right leading-tight', deltaCls)}>
-                  {delta >= 0 ? '▲' : '▼'}{Math.abs(delta).toFixed(1)}% vs 기존
+                <div className={cn('text-[10px] tabular-nums text-right leading-tight', deltaCls)}>
+                  {delta >= 0 ? '▲' : '▼'}{Math.abs(delta).toFixed(1)}%
                 </div>
               )}
+            </td>
+
+            {/* ── MD 확정발주 ── */}
+            <td className="px-1.5 py-1 border-r border-slate-200"
+              style={{ background: '#f0fdf4' }}>
+              <InlineNumberInput value={color.aj} onChange={v => onUpdate(style.id, color.id, 'aj', v)}
+                min={0} disabled={inactive} />
+            </td>
+
+            {/* ── 위험 도트 ── */}
+            <td className="px-1 py-1 text-center" style={{ background: '#f0fdf4' }}>
+              {risk === 'danger'  && <span className="inline-block w-3 h-3 rounded-full bg-red-500" title="과다/과소발주 위험 (±50% 이상 차이)" />}
+              {risk === 'caution' && <span className="inline-block w-3 h-3 rounded-full bg-amber-400" title="발주량 주의 (±20~50% 차이)" />}
+              {risk === 'none'    && color.aj > 0 && <span className="inline-block w-3 h-3 rounded-full bg-emerald-400" title="정상 범위" />}
             </td>
           </tr>
         )
@@ -594,82 +631,99 @@ function StyleRows({ style, onTModal, onUpdate }: {
 
 // ─── 스타일 소계 ──────────────────────────────────────────
 function SubtotalRow({ style }: { style: StyleRow }) {
-  let sumOld = 0, sumNew = 0, sumL = 0, sumM = 0, sumN = 0, sumStock = 0
+  let sumOld = 0, sumNew = 0, sumN = 0, sumStock = 0, sumAj = 0
   let hasOld = false, hasNew = false
   for (const c of style.colors) {
     if (c.calcOld != null) { sumOld += c.calcOld; hasOld = true }
     if (c.calcNew != null) { sumNew += c.calcNew; hasNew = true }
-    sumL += c.l; sumM += c.m; sumN += c.n; sumStock += (c.l - c.m)
+    sumN += c.n; sumStock += Math.max(0, c.l - c.m); sumAj += c.aj
   }
-  const delta  = hasOld && sumOld > 0 ? ((sumNew - sumOld) / sumOld) * 100 : null
-  const soreal = sumL > 0 ? sumM / sumL * 100 : null
-  const qPct   = sumStock > 0 ? sumN / sumStock * 100 : null
+  const delta = hasOld && sumOld > 0 ? ((sumNew - sumOld) / sumOld) * 100 : null
+  const qPct  = sumStock > 0 ? sumN / sumStock * 100 : null
 
   return (
-    <tr className="border-t-2 border-b-2 border-slate-300 text-sm font-semibold" style={{ background: '#f1f5f9' }}>
-      <td colSpan={2} className="px-3 py-1.5 text-slate-500 text-xs font-semibold">{style.colors.length}컬러 합계</td>
-      {/* 누적입량 */}
-      <td className="px-2 py-1 text-right tabular-nums text-slate-700 border-l-2 border-slate-200">{sumL.toLocaleString()}</td>
-      {/* 소진율 */}
-      <td className="px-2 py-1 text-right tabular-nums text-slate-600">{soreal != null ? soreal.toFixed(1) + '%' : '—'}</td>
-      {/* 분배매장 */}
-      <td />
+    <tr className="text-xs font-bold border-t-2 border-b border-slate-300"
+      style={{ background: '#f8fafc' }}>
+      <td colSpan={3} className="px-3 py-1 text-slate-500 font-semibold">
+        {style.colors.length}컬러 합계
+      </td>
       {/* 주판량 */}
-      <td className="px-2 py-1 text-right tabular-nums text-slate-700">{sumN.toLocaleString()}</td>
+      <td className="px-2 py-1 text-right tabular-nums text-slate-700 border-r border-slate-200">
+        {sumN.toLocaleString()}
+      </td>
       {/* 주판율 */}
-      <td className="px-2 py-1 text-right tabular-nums text-slate-600">{qPct != null ? qPct.toFixed(1) + '%' : '—'}</td>
-      {/* 원가율 */}
-      <td />
+      <td className="px-2 py-1 text-right tabular-nums text-slate-600 border-r border-slate-200">
+        {qPct != null ? qPct.toFixed(1) + '%' : '—'}
+      </td>
       {/* 현재재고 */}
-      <td className="px-2 py-1 text-right tabular-nums text-slate-700">{sumStock.toLocaleString()}</td>
-      {/* 생산정보 */}
-      <td className="border-l-2 border-slate-200" />
-      {/* 전년T/판매기간/가중치 */}
-      <td className="border-l-2 border-slate-200" /><td /><td />
+      <td className="px-2 py-1 text-right tabular-nums text-slate-700 border-r border-slate-200">
+        {sumStock.toLocaleString()}
+      </td>
+      {/* 발주성향/전년T */}
+      <td className="border-r border-slate-200" />
+      <td className="border-r border-slate-200" />
       {/* 기존 */}
-      <td className="px-2 py-1 text-right tabular-nums border-l-2 border-slate-200 bg-slate-200 text-slate-700">{hasOld ? sumOld.toLocaleString() : '—'}</td>
+      <td className="px-2 py-1 text-right tabular-nums border-r border-slate-200 text-slate-700"
+        style={{ background: '#e2e8f0' }}>
+        {hasOld ? sumOld.toLocaleString() : '—'}
+      </td>
       {/* 신규 */}
-      <td className="px-2 py-1 border-l-2 border-slate-200 bg-blue-100">
+      <td className="px-2 py-1 border-r border-slate-200" style={{ background: '#dbeafe' }}>
         <div className="text-right tabular-nums text-blue-800">{hasNew ? sumNew.toLocaleString() : '—'}</div>
         {delta != null && (
-          <div className={cn('text-xs tabular-nums text-right leading-tight', delta > 5 ? 'text-orange-500' : delta < -5 ? 'text-blue-500' : 'text-slate-400')}>
-            {delta >= 0 ? '▲' : '▼'}{Math.abs(delta).toFixed(1)}% vs 기존
+          <div className={cn('text-[10px] tabular-nums text-right', delta > 5 ? 'text-orange-500' : delta < -5 ? 'text-blue-500' : 'text-slate-400')}>
+            {delta >= 0 ? '▲' : '▼'}{Math.abs(delta).toFixed(1)}%
           </div>
         )}
       </td>
+      {/* MD 확정 */}
+      <td className="px-2 py-1 text-right tabular-nums text-emerald-800 border-r border-slate-200"
+        style={{ background: '#dcfce7' }}>
+        {sumAj > 0 ? sumAj.toLocaleString() : '—'}
+      </td>
+      <td style={{ background: '#dcfce7' }} />
     </tr>
   )
 }
 
 // ─── 전체 합계 ────────────────────────────────────────────
-function GrandTotalRow({ styles, totalL, totalM, totalN, totalStock, totalOld, totalNew }: {
-  styles: StyleRow[]; totalL: number; totalM: number; totalN: number; totalStock: number; totalOld: number; totalNew: number
+function GrandTotalRow({ styles, totalN, totalStock, totalOld, totalNew, totalAj }: {
+  styles: StyleRow[]; totalN: number; totalStock: number; totalOld: number; totalNew: number; totalAj: number
 }) {
-  const soreal = totalL > 0 ? totalM / totalL * 100 : null
-  const qPct   = totalStock > 0 ? totalN / totalStock * 100 : null
-  const delta  = totalOld > 0 ? ((totalNew - totalOld) / totalOld * 100) : null
+  const qPct  = totalStock > 0 ? totalN / totalStock * 100 : null
+  const delta = totalOld > 0 ? ((totalNew - totalOld) / totalOld * 100) : null
 
   return (
-    <tr className="border-t-4 border-slate-400 text-sm font-bold" style={{ background: '#e2e8f0' }}>
-      <td colSpan={2} className="px-3 py-2 text-slate-700">전체 합계 ({styles.length}개 스타일)</td>
-      <td className="px-2 py-2 text-right tabular-nums text-slate-800 border-l-2 border-slate-300">{totalL.toLocaleString()}</td>
-      <td className="px-2 py-2 text-right tabular-nums text-slate-700">{soreal != null ? soreal.toFixed(1) + '%' : '—'}</td>
-      <td />
-      <td className="px-2 py-2 text-right tabular-nums text-slate-800">{totalN.toLocaleString()}</td>
-      <td className="px-2 py-2 text-right tabular-nums text-slate-700">{qPct != null ? qPct.toFixed(1) + '%' : '—'}</td>
-      <td />
-      <td className="px-2 py-2 text-right tabular-nums text-slate-800">{totalStock.toLocaleString()}</td>
-      <td className="border-l-2 border-slate-300" />
-      <td className="border-l-2 border-slate-300" /><td /><td />
-      <td className="px-2 py-2 text-right tabular-nums border-l-2 border-slate-300 bg-slate-300 text-slate-800">{totalOld > 0 ? totalOld.toLocaleString() : '—'}</td>
-      <td className="px-2 py-2 border-l-2 border-slate-300 bg-blue-200">
+    <tr className="border-t-4 border-slate-400 text-xs font-bold" style={{ background: '#e2e8f0' }}>
+      <td colSpan={3} className="px-3 py-2 text-slate-700">
+        전체 합계 ({styles.length}개 스타일)
+      </td>
+      <td className="px-2 py-2 text-right tabular-nums text-slate-800 border-r border-slate-300">
+        {totalN.toLocaleString()}
+      </td>
+      <td className="px-2 py-2 text-right tabular-nums text-slate-700 border-r border-slate-300">
+        {qPct != null ? qPct.toFixed(1) + '%' : '—'}
+      </td>
+      <td className="px-2 py-2 text-right tabular-nums text-slate-800 border-r border-slate-300">
+        {totalStock.toLocaleString()}
+      </td>
+      <td className="border-r border-slate-300" />
+      <td className="border-r border-slate-300" />
+      <td className="px-2 py-2 text-right tabular-nums border-r border-slate-300 bg-slate-300 text-slate-800">
+        {totalOld > 0 ? totalOld.toLocaleString() : '—'}
+      </td>
+      <td className="px-2 py-2 border-r border-slate-300 bg-blue-200">
         <div className="text-right tabular-nums text-blue-900">{totalNew > 0 ? totalNew.toLocaleString() : '—'}</div>
         {delta != null && (
-          <div className={cn('text-xs tabular-nums text-right leading-tight', delta > 5 ? 'text-orange-600' : delta < -5 ? 'text-blue-600' : 'text-slate-500')}>
-            {delta >= 0 ? '▲' : '▼'}{Math.abs(delta).toFixed(1)}% vs 기존
+          <div className={cn('text-[10px] tabular-nums text-right', delta > 5 ? 'text-orange-600' : delta < -5 ? 'text-blue-600' : 'text-slate-500')}>
+            {delta >= 0 ? '▲' : '▼'}{Math.abs(delta).toFixed(1)}%
           </div>
         )}
       </td>
+      <td className="px-2 py-2 text-right tabular-nums border-r border-slate-300 bg-emerald-200 text-emerald-900">
+        {totalAj > 0 ? totalAj.toLocaleString() : '—'}
+      </td>
+      <td className="bg-emerald-200" />
     </tr>
   )
 }
@@ -680,42 +734,36 @@ function Fsel({ label, value, onChange, children }: {
 }) {
   return (
     <select value={value} onChange={e => onChange(e.target.value)}
-      className="text-sm border border-slate-200 rounded px-2 py-1 bg-white text-slate-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-400"
+      className="text-xs border border-slate-200 rounded px-2 py-1 bg-white text-slate-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-400"
       aria-label={label}>
       {children}
     </select>
   )
 }
 
-function ColTh({ field, sortField, sortDir, onSort, children, bg, border, className, style }: {
-  field: string; sortField: string | null; sortDir: 'asc' | 'desc'
-  onSort: (f: string) => void; children: React.ReactNode
-  bg?: string; border?: boolean; className?: string; style?: React.CSSProperties
+function SortIcon({ field, current, dir, onClick }: {
+  field: string; current: string | null; dir: 'asc' | 'desc'; onClick: (f: string) => void
 }) {
-  const active = sortField === field
+  const active = current === field
   return (
-    <th
-      onClick={() => onSort(field)}
-      className={cn('px-1 pb-1.5 text-center whitespace-nowrap cursor-pointer select-none hover:opacity-80 transition-opacity', bg, border && 'border-l-2 border-slate-500', className)}
-      style={style}
-    >
-      <span className="inline-flex items-center gap-0.5">
-        {children}
-        {active ? (
-          sortDir === 'asc' ? <ArrowUp className="w-3 h-3 inline" /> : <ArrowDown className="w-3 h-3 inline" />
-        ) : (
-          <ArrowUpDown className="w-3 h-3 inline opacity-40" />
-        )}
-      </span>
-    </th>
+    <span onClick={e => { e.stopPropagation(); onClick(field) }}
+      className="ml-1 cursor-pointer inline-flex align-middle opacity-60 hover:opacity-100">
+      {active ? (dir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+    </span>
   )
 }
 
-function SortIcon({ field, current, dir, onClick }: { field: string; current: string | null; dir: 'asc' | 'desc'; onClick: (f: string) => void }) {
+function ColSort({ field, current, dir, onClick, children }: {
+  field: string; current: string | null; dir: 'asc' | 'desc'
+  onClick: (f: string) => void; children: React.ReactNode
+}) {
   const active = current === field
   return (
-    <span onClick={e => { e.stopPropagation(); onClick(field) }} className="ml-1 cursor-pointer inline-flex align-middle opacity-60 hover:opacity-100">
-      {active ? (dir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+    <span onClick={() => onClick(field)} className="inline-flex items-center gap-0.5 cursor-pointer hover:opacity-80 select-none">
+      {children}
+      {active
+        ? (dir === 'asc' ? <ArrowUp className="w-2.5 h-2.5" /> : <ArrowDown className="w-2.5 h-2.5" />)
+        : <ArrowUpDown className="w-2.5 h-2.5 opacity-40" />}
     </span>
   )
 }
@@ -727,16 +775,21 @@ function PlcBadge({ plc }: { plc: string }) {
     '유지기': 'bg-orange-50 text-orange-700 border-orange-200',
     '쇠퇴기': 'bg-red-50 text-red-700 border-red-200',
   }
-  return <span className={cn('text-xs px-1.5 py-0 rounded border font-semibold leading-5 mt-0.5 inline-block', map[plc] ?? '')}>{plc}</span>
+  return (
+    <span className={cn('text-[10px] px-1.5 py-0 rounded border font-semibold leading-4 inline-block', map[plc] ?? '')}>
+      {plc}
+    </span>
+  )
 }
 
-function Tip({ t }: { t: string }) {
+function SummaryItem({ label, value, cls, children }: {
+  label: string; value: string; cls?: string; children?: React.ReactNode
+}) {
   return (
-    <span className="relative group inline-flex items-center ml-0.5 align-middle">
-      <span className="text-[9px] text-slate-400 group-hover:text-slate-200 cursor-help select-none">ℹ</span>
-      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-44 bg-slate-900 text-slate-100 text-xs rounded px-2 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-normal text-center leading-relaxed shadow-xl border border-slate-700">
-        {t}
-      </span>
-    </span>
+    <div className="flex items-center gap-1.5 shrink-0">
+      <span className="text-slate-400">{label}:</span>
+      <span className={cls}>{value}</span>
+      {children}
+    </div>
   )
 }

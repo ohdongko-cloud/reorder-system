@@ -18,7 +18,7 @@ interface ReorderState {
   updateColorField: (
     styleId: string,
     colorId: string,
-    field: 'n' | 's' | 't' | 'r' | 'aj' | 'weight',
+    field: 'n' | 's' | 't' | 'r' | 'aj' | 'weight' | 'strategy',
     value: number
   ) => void
 
@@ -36,10 +36,11 @@ interface ReorderState {
 }
 
 function recalcColor(color: ColorRow, style: StyleRow): ColorRow {
+  const strategyToUse = color.strategy ?? style.strategy
   const old = calcOld(color.l, color.m, color.n, color.r, color.s, color.t, style.stores)
   const nw = calcNew(
     color.l, color.m, color.n, color.r, color.s, color.t,
-    style.stores, style.plc, style.days_since_inbound, style.strategy
+    style.stores, style.plc, style.days_since_inbound, strategyToUse
   )
 
   return {
@@ -57,8 +58,9 @@ function recalcColor(color: ColorRow, style: StyleRow): ColorRow {
 function applyColorDefaults(c: ColorRow): ColorRow {
   return {
     ...c,
-    s: c.s || 5,           // 판매기간 기본 5주
-    weight: c.weight ?? 1.0, // 가중치 기본 1.0
+    s: c.s || 5,
+    weight: c.weight ?? 1.0,
+    strategy: c.strategy ?? 3,
   }
 }
 
@@ -107,7 +109,7 @@ export const useReorderStore = create<ReorderState>((set, get) => ({
     set(state => {
       const styles = state.styles.map(style => {
         if (style.id !== styleId) return style
-        const updated = { ...style, strategy }
+        const updated = { ...style, strategy, colors: style.colors.map(c => ({ ...c, strategy })) }
         return { ...updated, colors: updated.colors.map(c => recalcColor(c, updated)) }
       })
       return { styles }
@@ -117,7 +119,7 @@ export const useReorderStore = create<ReorderState>((set, get) => ({
   setAllStrategies: (strategy) => {
     set(state => ({
       styles: state.styles.map(style => {
-        const updated = { ...style, strategy }
+        const updated = { ...style, strategy, colors: style.colors.map(c => ({ ...c, strategy })) }
         return { ...updated, colors: updated.colors.map(c => recalcColor(c, updated)) }
       }),
     }))
