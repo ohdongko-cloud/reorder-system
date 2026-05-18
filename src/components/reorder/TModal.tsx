@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useReorderStore } from '@/store/reorder-store'
 import { calcNew, calcOld } from '@/lib/reorder-calc'
 import { PLC_COLORS } from '@/lib/constants'
 import { cn } from '@/lib/utils'
-import type { ColorRow, StyleRow } from '@/types/reorder'
+import type { ColorRow, StyleRow, PrevYearStyleCandidate } from '@/types/reorder'
 
 interface Props {
   open: boolean
@@ -15,38 +15,26 @@ interface Props {
   style: StyleRow
 }
 
-// ── Mock weekly sales (16 weeks, seeded by code + PLC) ────────────────────────
-function seededRandom(seed: number) {
-  let s = seed
-  return () => {
-    s = (s * 1664525 + 1013904223) & 0xffffffff
-    return (s >>> 0) / 0xffffffff
+// ── 한국어 상품명 유사도 (바이그램 Jaccard) ──────────────────────────────────
+function koreanNameSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0
+  const aNorm = a.replace(/\s+/g, '').toLowerCase()
+  const bNorm = b.replace(/\s+/g, '').toLowerCase()
+  if (aNorm === bNorm) return 1
+
+  // 바이그램 집합 생성
+  function bigrams(s: string): Set<string> {
+    const set = new Set<string>()
+    for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2))
+    if (s.length === 1) set.add(s)  // 한 글자짜리도 포함
+    return set
   }
-}
-
-function mockWeeklySales(code: string, plc: string): number[] {
-  const seed = code.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 7)
-  const rng = seededRandom(seed)
-  const base = Math.floor(rng() * 600) + 200 // 200~800
-
-  return Array.from({ length: 16 }, (_, i) => {
-    let factor: number
-    const t = i / 15 // 0→1
-
-    if (plc === '도입기') {
-      factor = 0.4 + t * 1.2
-    } else if (plc === '성장기') {
-      const peak = 0.55
-      factor = 1 - Math.pow((t - peak) / peak, 2) * 0.6
-    } else if (plc === '유지기') {
-      factor = 0.85 + (rng() - 0.5) * 0.2
-    } else {
-      // 쇠퇴기
-      factor = 1.2 - t * 0.9
-    }
-    const noise = (rng() - 0.5) * 0.25
-    return Math.max(0, Math.round(base * (factor + noise)))
-  })
+  const aG = bigrams(aNorm)
+  const bG = bigrams(bNorm)
+  let intersection = 0
+  aG.forEach(g => { if (bG.has(g)) intersection++ })
+  const union = aG.size + bG.size - intersection
+  return union > 0 ? intersection / union : 0
 }
 
 // ── WeeklyBarChart SVG ────────────────────────────────────────────────────────
@@ -118,82 +106,51 @@ function SliderField({
   )
 }
 
-// ── Similar style search ──────────────────────────────────────────────────────
-function computeCodeSimilarity(a: string, b: string): number {
-  const aLow = a.toLowerCase()
-  const bLow = b.toLowerCase()
-  let prefix = 0
-  const minLen = Math.min(aLow.length, bLow.length)
-  for (let i = 0; i < minLen; i++) {
-    if (aLow[i] === bLow[i]) prefix++
-    else break
-  }
-  const aSet = new Set(aLow.split(''))
-  const bSet = new Set(bLow.split(''))
-  let shared = 0
-  aSet.forEach(c => { if (bSet.has(c)) shared++ })
-  const charOverlap = shared / Math.max(aSet.size, bSet.size)
-  return (prefix / Math.max(a.length, b.length)) * 0.7 + charOverlap * 0.3
-}
+// ── 전년 상품 유사도 검색 ─────────────────────────────────────────────────────
+function usePrevYearMatches(style: StyleRow, searchQuery: string): PrevYearStyleCandidate[] {
+  const candidates = useReorderStore(s => s.prevYearCandidates)
+  return useMemo(() => {
+    if (candidates.length === 0) return []
+    const query = searchQuery.trim()
 
-interface SimilarEntry {
-  code: string
-  color: string
-  plc: string
-  t: number
-  s: number
-  r: number
-  calcNew: number | null
-  similarity: number
-  weeklySales: number[]
-}
+    let scored: Array<{ c: PrevYearStyleCandidate; score: number }>
 
-function useSimilarStyles(style: StyleRow): SimilarEntry[] {
-  const styles = useReorderStore(s => s.styles)
-  const candidates: SimilarEntry[] = []
-
-  for (const s of styles) {
-    if (s.id === style.id) continue
-    const sim = computeCodeSimilarity(style.code, s.code)
-    if (sim < 0.25) continue
-
-    for (const c of s.colors) {
-      candidates.push({
-        code: s.code,
-        color: c.color_name,
-        plc: s.plc,
-        t: c.t,
-        s: c.s,
-        r: c.r,
-        calcNew: c.calcNew ?? null,
-        similarity: sim,
-        weeklySales: mockWeeklySales(s.code, s.plc),
+    if (query) {
+      // 검색어 있으면: 상품명 + 코드 모두 검색
+      const qLow = query.toLowerCase()
+      scored = candidates.map(c => {
+        const nameScore = koreanNameSimilarity(query, c.styleName)
+        const codeMatch = c.styleCode.toLowerCase().includes(qLow) ? 0.8 : 0
+        const nameContains = c.styleName.includes(query) ? 0.6 : 0
+        return { c, score: Math.max(nameScore, codeMatch, nameContains) }
+      }).filter(x => x.score > 0)
+    } else {
+      // 검색어 없으면: 현재 스타일명(있으면) 또는 코드로 유사도 계산
+      const refName = style.name ?? ''
+      scored = candidates.map(c => {
+        const score = refName
+          ? koreanNameSimilarity(refName, c.styleName)
+          : 0.1  // 이름 없으면 모두 동일 순위
+        return { c, score }
       })
     }
-  }
 
-  candidates.sort((a, b) => b.similarity - a.similarity)
-  const seen = new Set<string>()
-  const result: SimilarEntry[] = []
-  for (const c of candidates) {
-    if (seen.has(c.code)) continue
-    seen.add(c.code)
-    result.push(c)
-    if (result.length >= 5) break
-  }
-  return result
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, 5).map(x => x.c)
+  }, [candidates, style.name, style.code, searchQuery])
 }
 
 // ── Main Modal ────────────────────────────────────────────────────────────────
 export function TModal({ open, onClose, color, style }: Props) {
   const updateColorField = useReorderStore(s => s.updateColorField)
+  const setStylePrevYear = useReorderStore(s => s.setStylePrevYear)
 
   const [localT, setLocalT] = useState(color.t)
   const [localS, setLocalS] = useState(color.s)
   const [localR, setLocalR] = useState(color.r)
   const [localW, setLocalW] = useState(color.weight ?? 1.0)
-  const [selectedCode, setSelectedCode] = useState<string | null>(null)
-  const [directCode, setDirectCode] = useState('')
+  const [selectedCandidate, setSelectedCandidate] = useState<PrevYearStyleCandidate | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => {
     if (open) {
@@ -201,12 +158,13 @@ export function TModal({ open, onClose, color, style }: Props) {
       setLocalS(color.s)
       setLocalR(color.r)
       setLocalW(color.weight ?? 1.0)
-      setSelectedCode(null)
-      setDirectCode('')
+      setSelectedCandidate(null)
+      setSearchQuery('')
     }
   }, [open, color.t, color.s, color.r, color.weight])
 
-  const similar = useSimilarStyles(style)
+  const prevYearMatches = usePrevYearMatches(style, searchQuery)
+  const hasCandidates = useReorderStore(s => s.prevYearCandidates.length > 0)
 
   // current preview
   const previewOld = calcOld(color.l, color.m, color.n, color.r, color.s, color.t, style.stores)
@@ -221,11 +179,10 @@ export function TModal({ open, onClose, color, style }: Props) {
     ? ((newAd - oldAd) / oldAd * 100)
     : null
 
-  function handleSelectCard(entry: SimilarEntry) {
-    setSelectedCode(entry.code)
-    setLocalT(entry.t)
-    setLocalS(entry.s)
-    setLocalR(entry.r)
+  function handleSelectCard(entry: PrevYearStyleCandidate) {
+    setSelectedCandidate(entry)
+    // 전년 잔여 주수를 S에 반영 (0이면 기존값 유지)
+    if (entry.estRemainWeeks > 0) setLocalS(entry.estRemainWeeks)
   }
 
   function handleConfirm() {
@@ -233,18 +190,14 @@ export function TModal({ open, onClose, color, style }: Props) {
     updateColorField(style.id, color.id, 's', localS)
     updateColorField(style.id, color.id, 'r', localR)
     updateColorField(style.id, color.id, 'weight', localW)
+    // 선택된 전년 상품의 데이터를 스타일에 매칭
+    if (selectedCandidate) {
+      setStylePrevYear(style.id, selectedCandidate.prevYearData)
+    }
     onClose()
   }
 
   const plcCls = PLC_COLORS[style.plc] ?? ''
-
-  const plcBarColor: Record<string, string> = {
-    '도입기': '#10b981',
-    '성장기': '#3b82f6',
-    '유지기': '#f97316',
-    '쇠퇴기': '#ef4444',
-  }
-  const chartColor = plcBarColor[style.plc] ?? '#3b82f6'
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
@@ -361,26 +314,33 @@ export function TModal({ open, onClose, color, style }: Props) {
           <div className="flex-1 min-w-0 px-5 py-4">
             <div className="flex items-center justify-between mb-3">
               <p className="text-[11px] font-semibold text-slate-600">
-                유사 스타일 참고
+                전년 유사 상품 선택
                 <span className="text-[10px] font-normal text-slate-400 ml-1.5">
-                  스타일 코드 일치도 상위 5개 · 클릭 시 파라미터 자동 적용
+                  상품명 유사도 상위 5개 · 선택 시 S값 및 전년 데이터 자동 적용
                 </span>
               </p>
             </div>
 
-            {/* Similar product radio cards */}
-            {similar.length > 0 ? (
+            {/* 검색 입력 */}
+            <div className="mb-3">
+              <input
+                type="text"
+                placeholder="상품명 또는 스타일코드 검색..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full border border-slate-200 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder:text-slate-300"
+              />
+            </div>
+
+            {/* 전년 상품 후보 카드 */}
+            {prevYearMatches.length > 0 ? (
               <div className="space-y-2">
-                {similar.map((entry, i) => {
-                  const isSelected = selectedCode === entry.code
-                  const pct = Math.round(entry.similarity * 100)
-                  const plcColor: Record<string, string> = {
-                    '도입기': 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                    '성장기': 'bg-blue-50 text-blue-700 border-blue-200',
-                    '유지기': 'bg-orange-50 text-orange-700 border-orange-200',
-                    '쇠퇴기': 'bg-red-50 text-red-700 border-red-200',
-                  }
-                  const cardBarColor = plcBarColor[entry.plc] ?? '#3b82f6'
+                {prevYearMatches.map((entry, i) => {
+                  const isSelected = selectedCandidate?.styleCode === entry.styleCode
+                  const salesPct = Math.round(entry.cumSalesRate)
+                  const chartData = entry.weeklyNormSales.length > 0
+                    ? entry.weeklyNormSales
+                    : []
 
                   return (
                     <button
@@ -401,35 +361,42 @@ export function TModal({ open, onClose, color, style }: Props) {
                         {isSelected && <div className="w-2 h-2 rounded-full bg-blue-500" />}
                       </div>
 
-                      {/* Code + meta */}
+                      {/* 상품명 + 코드 + 실적 */}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 mb-0.5">
-                          <span className="font-mono text-[11px] font-semibold text-slate-800 truncate">{entry.code}</span>
-                          <span className={cn('text-[9px] px-1 py-0.5 rounded border font-semibold shrink-0', plcColor[entry.plc] ?? '')}>
-                            {entry.plc}
-                          </span>
-                          <span className="text-[9px] text-slate-400 shrink-0">일치 {pct}%</span>
+                          <span className="text-[11px] font-semibold text-slate-800 truncate max-w-[160px]">{entry.styleName}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className="font-mono text-[10px] text-slate-500">{entry.styleCode}</span>
                         </div>
                         <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                          <span>T={entry.t.toFixed(2)}</span>
+                          <span className="text-slate-400">주판량</span>
+                          <span className="font-semibold text-slate-700">{entry.weekNormSalesQty.toLocaleString()}</span>
                           <span className="text-slate-300">|</span>
-                          <span>S={entry.s}주</span>
-                          <span className="text-slate-300">|</span>
-                          <span>R={entry.r.toFixed(1)}x</span>
-                          {entry.calcNew != null && (
+                          <span className="text-slate-400">판매율</span>
+                          <span className={cn('font-semibold', salesPct >= 70 ? 'text-emerald-600' : salesPct >= 40 ? 'text-blue-600' : 'text-red-500')}>
+                            {salesPct}%
+                          </span>
+                          {entry.estRemainWeeks > 0 && (
                             <>
                               <span className="text-slate-300">|</span>
-                              <span className="text-blue-600 font-semibold">{entry.calcNew.toLocaleString()}개</span>
+                              <span className="text-slate-400">잔여</span>
+                              <span className="font-semibold text-amber-600">{entry.estRemainWeeks}주</span>
                             </>
                           )}
                         </div>
                       </div>
 
-                      {/* 16-week bar chart */}
-                      <div className="shrink-0">
-                        <div className="text-[9px] text-slate-400 text-center mb-0.5">16주 판매 추이</div>
-                        <WeeklyBarChart data={entry.weeklySales} color={isSelected ? '#3b82f6' : cardBarColor + '99'} />
-                      </div>
+                      {/* 전년 PLC 바 차트 */}
+                      {chartData.length > 0 && (
+                        <div className="shrink-0">
+                          <div className="text-[9px] text-slate-400 text-center mb-0.5">전년 주별 판매</div>
+                          <WeeklyBarChart
+                            data={chartData.slice(0, 16)}
+                            color={isSelected ? '#3b82f6' : '#94a3b8'}
+                          />
+                        </div>
+                      )}
                     </button>
                   )
                 })}
@@ -437,41 +404,24 @@ export function TModal({ open, onClose, color, style }: Props) {
             ) : (
               <div className="flex flex-col items-center justify-center py-8 text-center">
                 <div className="text-2xl mb-2">🔍</div>
-                <div className="text-[11px] text-slate-400">일치도 25% 이상인 유사 스타일이 없습니다</div>
-                <div className="text-[10px] text-slate-300 mt-1">아래에서 스타일 코드를 직접 입력해보세요</div>
+                <div className="text-[11px] text-slate-400">
+                  {!hasCandidates
+                    ? '전년 데이터가 없습니다 (BI_스타일별전년 시트 필요)'
+                    : '검색 결과가 없습니다'}
+                </div>
+                <div className="text-[10px] text-slate-300 mt-1">위 검색창에서 상품명 또는 스타일코드를 입력해보세요</div>
               </div>
             )}
 
-            {/* Direct code input */}
-            <div className="mt-4 pt-3 border-t border-slate-100">
-              <p className="text-[10px] text-slate-500 mb-1.5">또는 스타일 코드 직접 입력</p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="예) 24SS-TOP-001"
-                  value={directCode}
-                  onChange={e => setDirectCode(e.target.value)}
-                  className="flex-1 border border-slate-200 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder:text-slate-300"
-                />
-                <button
-                  disabled={!directCode.trim()}
-                  onClick={() => {
-                    // In future, look up style by code from store
-                    setSelectedCode(directCode.trim())
-                  }}
-                  className="px-3 py-1.5 rounded bg-slate-700 text-white text-xs font-medium hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  참고 적용
-                </button>
-              </div>
-            </div>
-
-            {/* Selected card summary */}
-            {selectedCode && (
+            {/* 선택 완료 안내 */}
+            {selectedCandidate && (
               <div className="mt-3 px-3 py-2 rounded bg-blue-50 border border-blue-200 text-[10px] text-blue-700">
-                <span className="font-semibold">{selectedCode}</span>
-                {' '}의 T/S/R 값이 왼쪽 슬라이더에 반영되었습니다.
-                확인 후 <span className="font-semibold">이 파라미터로 적용</span>을 눌러주세요.
+                <span className="font-semibold">{selectedCandidate.styleName}</span>
+                {' '}({selectedCandidate.styleCode})가 선택되었습니다.
+                {selectedCandidate.estRemainWeeks > 0 && (
+                  <span> S={selectedCandidate.estRemainWeeks}주로 자동 설정됨.</span>
+                )}
+                {' '}확인 후 <span className="font-semibold">이 파라미터로 적용</span>을 눌러주세요.
               </div>
             )}
           </div>

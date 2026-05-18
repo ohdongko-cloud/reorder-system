@@ -32,6 +32,8 @@ export function ExcelUpload({ onClose }: Props) {
   const [dragOver, setDragOver] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const setStyles = useReorderStore(s => s.setStyles)
+  const setPrevYearCandidates = useReorderStore(s => s.setPrevYearCandidates)
+  const applyStyleNames = useReorderStore(s => s.applyStyleNames)
   const setCurrentSession = useReorderStore(s => s.setCurrentSession)
   const setSessions = useReorderStore(s => s.setSessions)
   const sessions = useReorderStore(s => s.sessions)
@@ -60,7 +62,7 @@ export function ExcelUpload({ onClose }: Props) {
       setStep('parsing')
       // yield to React so the label actually renders before synchronous parse
       await new Promise(r => setTimeout(r, 50))
-      const { styles, errors, sheetName } = await parseReorderExcel(buffer)
+      const { styles, errors, sheetName, prevYearCandidates, styleNameMap } = await parseReorderExcel(buffer)
 
       if (styles.length === 0) {
         toast.error(errors[0] ?? '파싱 실패 — BI 시트가 없거나 MI 스타일 데이터를 찾을 수 없습니다.')
@@ -110,6 +112,8 @@ export function ExcelUpload({ onClose }: Props) {
       if (errors.length) errors.forEach(w => toast.warning(w))
 
       setStyles(stylesData)
+      applyStyleNames(styleNameMap)
+      setPrevYearCandidates(prevYearCandidates)
       setCurrentSession({ id: sessionId, name: sessionName, base_date: baseDate, created_by: null, created_at: new Date().toISOString() })
       setSessions([{ id: sessionId, name: sessionName, base_date: baseDate, created_by: null, created_at: new Date().toISOString() }, ...sessions])
       onClose()

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { StyleRow, ColorRow, ReorderSession, Strategy } from '@/types/reorder'
+import type { StyleRow, ColorRow, ReorderSession, Strategy, PrevYearStyleCandidate, PrevYearData } from '@/types/reorder'
 import { calcOld, calcNewWithPrevYear, calcDeltaPct } from '@/lib/reorder-calc'
 import { MIN_RECOMMEND_QTY, inferBadges } from '@/lib/constants'
 
@@ -9,11 +9,19 @@ interface ReorderState {
   styles: StyleRow[]
   isLoading: boolean
   isSaving: boolean
+  prevYearCandidates: PrevYearStyleCandidate[]  // TModal 전년 상품 검색용
 
   setSessions: (sessions: ReorderSession[]) => void
   setCurrentSession: (session: ReorderSession | null) => void
   setStyles: (styles: StyleRow[]) => void
   setLoading: (v: boolean) => void
+  setPrevYearCandidates: (candidates: PrevYearStyleCandidate[]) => void
+
+  /** 현재연도 코드 → 상품명 매핑을 styles에 적용 (업로드 후 호출) */
+  applyStyleNames: (nameMap: Record<string, string>) => void
+
+  /** 특정 스타일의 prevYear 데이터를 교체하고 재계산 */
+  setStylePrevYear: (styleId: string, prevYear: PrevYearData | null) => void
 
   updateColorField: (
     styleId: string,
@@ -76,10 +84,32 @@ export const useReorderStore = create<ReorderState>((set, get) => ({
   styles: [],
   isLoading: false,
   isSaving: false,
+  prevYearCandidates: [],
 
   setSessions: (sessions) => set({ sessions }),
   setCurrentSession: (session) => set({ currentSession: session }),
   setLoading: (v) => set({ isLoading: v }),
+  setPrevYearCandidates: (candidates) => set({ prevYearCandidates: candidates }),
+
+  applyStyleNames: (nameMap) => {
+    set(state => ({
+      styles: state.styles.map(style => {
+        const name = nameMap[style.code]
+        return name ? { ...style, name } : style
+      }),
+    }))
+  },
+
+  setStylePrevYear: (styleId, prevYear) => {
+    set(state => {
+      const styles = state.styles.map(style => {
+        if (style.id !== styleId) return style
+        const updated = { ...style, prevYear }
+        return { ...updated, colors: updated.colors.map(c => recalcColor(c, updated)) }
+      })
+      return { styles }
+    })
+  },
 
   setStyles: (styles) => {
     const calculated = styles.map(style => {

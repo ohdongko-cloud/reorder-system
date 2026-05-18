@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx'
-import type { StyleRow, ColorRow, PlcStage, Strategy, PrevYearStyleData, PrevYearPlcData, PrevYearData } from '@/types/reorder'
+import type { StyleRow, ColorRow, PlcStage, Strategy, PrevYearStyleData, PrevYearPlcData, PrevYearData, PrevYearStyleCandidate } from '@/types/reorder'
 import { inferStyleType, inferPlc, inferBadges } from '@/lib/constants'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -7,6 +7,8 @@ export interface ParseResult {
   styles: Omit<StyleRow, 'session_id'>[]
   errors: string[]
   sheetName: string
+  prevYearCandidates: PrevYearStyleCandidate[]  // TModal 전년 상품 검색용
+  styleNameMap: Record<string, string>          // 현재연도 코드 → 상품명 매핑
 }
 
 // ─────────────────────────────────────────────
@@ -14,6 +16,7 @@ export interface ParseResult {
 // ─────────────────────────────────────────────
 const PREV_YEAR_STYLE = {
   styleCode:        3,   // 스타일코드(Now)
+  styleName:        4,   // 상품명
   mdpType:         14,   // MDP유형(Now)
   orderQty:        15,   // 발주량
   cumInboundQty:   19,   // 누적입고량
@@ -101,8 +104,11 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
   // ── 3a. 전년 데이터 맵 (시트 없으면 빈 맵) ──
   // BI_스타일별전년 헤더에서 전년 참조 주차를 별도로 읽음 (BI는 2026, 전년시트는 2025)
   const prevYearRefDateStr = readPrevYearRefDate(wb)
-  const { exactMap: prevStyleExact, categoryMap: prevStyleCategory } = buildPrevYearStyleMap(wb)
-  const { exactMap: prevPlcExact,   categoryMap: prevPlcCategory   } = buildPrevYearPlcMap(wb, prevYearRefDateStr)
+  const { exactMap: prevStyleExact, categoryMap: prevStyleCategory, rawMap: prevStyleRaw } = buildPrevYearStyleMap(wb)
+  const { exactMap: prevPlcExact,   categoryMap: prevPlcCategory,   rawMap: prevPlcRaw   } = buildPrevYearPlcMap(wb, prevYearRefDateStr)
+
+  // 전년 상품 후보 리스트 (TModal 상품명 검색용)
+  const prevYearCandidates = buildPrevYearCandidateList(prevStyleRaw, prevPlcRaw)
 
   // ── 4. BI 시트 파싱 ──
   // styleCode → { colors, price, firstInbound, totalL }
@@ -157,11 +163,12 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
 
   if (styleMap.size === 0) {
     errors.push('BI 시트에서 MI 스타일 데이터를 찾을 수 없습니다.')
-    return { styles: [], errors, sheetName: 'BI' }
+    return { styles: [], errors, sheetName: 'BI', prevYearCandidates: [], styleNameMap: {} }
   }
 
   // ── 5. 결합 ──
   const styles: Omit<StyleRow, 'session_id'>[] = []
+  const styleNameMap: Record<string, string> = {}
 
   for (const [styleCode, accum] of styleMap) {
     const dist    = distMap.get(styleCode)
@@ -219,9 +226,14 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
       ? { style: prevStyle, plc: prevPlc }
       : null
 
+    // 상품명: 정확한 suffix 매칭된 전년 데이터에서 가져옴
+    const styleName = prevStyle?.styleName ?? ''
+    if (styleName) styleNameMap[styleCode] = styleName
+
     styles.push({
       id: accum.id,
       code: styleCode,
+      name: styleName || undefined,
       type: inferStyleType(styleCode),
       badges: inferBadges(styleCode),
       price: accum.price,
@@ -234,7 +246,7 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
     })
   }
 
-  return { styles, errors, sheetName: 'BI' }
+  return { styles, errors, sheetName: 'BI', prevYearCandidates, styleNameMap }
 }
 
 // ─────────────────────────────────────────────
@@ -259,15 +271,17 @@ function getItemCategoryKey(code: string): string | null {
 function buildPrevYearStyleMap(wb: XLSX.WorkBook): {
   exactMap:    Map<string, PrevYearStyleData>
   categoryMap: Map<string, PrevYearStyleData>
+  rawMap:      Map<string, PrevYearStyleData>   // 원본 스타일코드 → 데이터 (후보 리스트용)
 } {
   const exactMap    = new Map<string, PrevYearStyleData>()
   const categoryMap = new Map<string, PrevYearStyleData>()
+  const rawMap      = new Map<string, PrevYearStyleData>()
 
   const sheetName = wb.SheetNames.find(n =>
     n.replace(/[_\s]/g, '').toLowerCase().includes('스타일별전년') ||
     n.replace(/[_\s]/g, '').toLowerCase().includes('스타일전년')
   )
-  if (!sheetName) return { exactMap, categoryMap }
+  if (!sheetName) return { exactMap, categoryMap, rawMap }
 
   const ws   = wb.Sheets[sheetName]
   const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
@@ -288,7 +302,10 @@ function buildPrevYearStyleMap(wb: XLSX.WorkBook): {
     const styleCode = String(row[PREV_YEAR_STYLE.styleCode] ?? '').trim()
     if (!styleCode.startsWith('MI')) continue
 
+    const styleName = String(row[PREV_YEAR_STYLE.styleName] ?? '').trim()
+
     const data: PrevYearStyleData = {
+      styleName,
       orderQty:         toInt(row[PREV_YEAR_STYLE.orderQty]),
       cumInboundQty:    toInt(row[PREV_YEAR_STYLE.cumInboundQty]),
       cumSalesQty:      toInt(row[PREV_YEAR_STYLE.cumSalesQty]),
@@ -298,6 +315,9 @@ function buildPrevYearStyleMap(wb: XLSX.WorkBook): {
       cumSalesRate:     toFloat(row[PREV_YEAR_STYLE.cumSalesRate]),
       weekSalesRate:    toFloat(row[PREV_YEAR_STYLE.weekSalesRate]),
     }
+
+    // 원본 코드 맵 (후보 리스트 생성용)
+    rawMap.set(styleCode, data)
 
     // 1단계 맵: suffixKey(연도 제거)
     const suffixKey = getItemSuffixKey(styleCode)
@@ -333,10 +353,11 @@ function buildPrevYearStyleMap(wb: XLSX.WorkBook): {
     }
   }
 
-  // 2단계 맵: 카테고리 평균
+  // 2단계 맵: 카테고리 평균 (styleName은 빈 문자열)
   for (const [catKey, acc] of catAccum) {
     const n = acc.count
     categoryMap.set(catKey, {
+      styleName:        '',
       orderQty:         Math.round(acc.orderQty         / n),
       cumInboundQty:    Math.round(acc.cumInboundQty    / n),
       cumSalesQty:      Math.round(acc.cumSalesQty      / n),
@@ -348,7 +369,7 @@ function buildPrevYearStyleMap(wb: XLSX.WorkBook): {
     })
   }
 
-  return { exactMap, categoryMap }
+  return { exactMap, categoryMap, rawMap }
 }
 
 // ─────────────────────────────────────────────
@@ -359,34 +380,24 @@ function buildPrevYearStyleMap(wb: XLSX.WorkBook): {
 function buildPrevYearPlcMap(wb: XLSX.WorkBook, refDateStr: string): {
   exactMap:    Map<string, PrevYearPlcData>
   categoryMap: Map<string, PrevYearPlcData>
+  rawMap:      Map<string, PrevYearPlcData>   // 원본 스타일코드 → 데이터 (후보 리스트용)
 } {
   const exactMap    = new Map<string, PrevYearPlcData>()
   const categoryMap = new Map<string, PrevYearPlcData>()
+  const rawMap      = new Map<string, PrevYearPlcData>()
 
   const sheetName = wb.SheetNames.find(n =>
     n.replace(/[_\s]/g, '').toLowerCase().includes('전년plc')
   )
-  if (!sheetName) return { exactMap, categoryMap }
+  if (!sheetName) return { exactMap, categoryMap, rawMap }
 
   const ws   = wb.Sheets[sheetName]
   const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
   const header = rows[4] as unknown[]
 
-  // 전년 참조 주차(MM/DD~MM/DD) 컬럼 탐색
-  // refDateStr은 BI_스타일별전년의 참조일 (2025-MM-DD - 2025-MM-DD) 형식
-  const currentWeekKey = refDateStrToWeekKey(refDateStr)
-  let currentColIdx = -1
-  if (currentWeekKey) {
-    for (let c = PREV_PLC.weeklyStart; c < header.length; c++) {
-      if (String(header[c] ?? '').replace(/\s/g, '') === currentWeekKey) {
-        currentColIdx = c; break
-      }
-    }
-  }
-  // 폴백: 컬럼 중간 근처 (시즌 중반)
-  if (currentColIdx < 0) {
-    currentColIdx = Math.min(PREV_PLC.weeklyStart + 21, header.length - 1)
-  }
+  // 전년 참조 주차(MM/DD~MM/DD) 컬럼 탐색 — ±3일 근사 매칭
+  const currentColIdx = findNearestWeekColumn(header, refDateStr)
+
 
   // 카테고리 누적값
   type PlcCatAccum = {
@@ -425,6 +436,9 @@ function buildPrevYearPlcMap(wb: XLSX.WorkBook, refDateStr: string): {
       totalNormSales, salesBeforeCurrent, salesAfterCurrent,
       currentWeekSales, estRemainWeeks, weeklyNormSales,
     }
+
+    // 원본 코드 맵 (후보 리스트 생성용)
+    rawMap.set(styleCode, plcData)
 
     // 1단계 맵
     const suffixKey = getItemSuffixKey(styleCode)
@@ -468,7 +482,50 @@ function buildPrevYearPlcMap(wb: XLSX.WorkBook, refDateStr: string): {
     })
   }
 
-  return { exactMap, categoryMap }
+  return { exactMap, categoryMap, rawMap }
+}
+
+// ─────────────────────────────────────────────
+//  유틸: BI_전년PLC 헤더에서 ±3일 이내 가장 가까운 주차 컬럼 탐색
+//  refDateStr: "2025-05-12 - 2025-05-18"
+//  헤더 형식: "05/12~05/18"
+// ─────────────────────────────────────────────
+function findNearestWeekColumn(header: unknown[], refDateStr: string): number {
+  const fallback = Math.min(PREV_PLC.weeklyStart + 21, header.length - 1)
+  if (!refDateStr) return fallback
+
+  // refDateStr에서 시작일 MM/DD 파싱
+  const m = refDateStr.match(/\d{4}-(\d{2})-(\d{2})/)
+  if (!m) return fallback
+  const targetDoy = mmddToDoy(parseInt(m[1]), parseInt(m[2]))
+
+  let bestCol = fallback
+  let bestDist = Infinity
+
+  for (let c = PREV_PLC.weeklyStart; c < header.length; c++) {
+    const cell = String(header[c] ?? '').replace(/\s/g, '')
+    // "MM/DD~MM/DD" 형식에서 시작 MM/DD 추출
+    const hm = cell.match(/^(\d{2})\/(\d{2})~/)
+    if (!hm) continue
+    const headerDoy = mmddToDoy(parseInt(hm[1]), parseInt(hm[2]))
+    const dist = Math.abs(headerDoy - targetDoy)
+    if (dist < bestDist) {
+      bestDist = dist
+      bestCol = c
+      if (dist === 0) break   // 정확히 일치
+    }
+  }
+
+  // 7일(1주) 이상 차이나면 중간값 폴백 (데이터 이상)
+  return bestDist <= 7 ? bestCol : fallback
+}
+
+/** 월/일 → 연중 일수 (윤년 무시, 비교용) */
+function mmddToDoy(month: number, day: number): number {
+  const daysInMonth = [0,31,28,31,30,31,30,31,31,30,31,30,31]
+  let doy = day
+  for (let i = 1; i < month; i++) doy += daysInMonth[i]
+  return doy
 }
 
 // ─────────────────────────────────────────────
@@ -483,6 +540,42 @@ function readPrevYearRefDate(wb: XLSX.WorkBook): string {
   if (!sheetName) return ''
   const rows: unknown[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' })
   return String((rows[1] as unknown[])?.[2] ?? '')
+}
+
+// ─────────────────────────────────────────────
+//  전년 상품 후보 리스트 생성
+//  rawStyleMap + rawPlcMap 을 결합해 PrevYearStyleCandidate[] 반환
+// ─────────────────────────────────────────────
+function buildPrevYearCandidateList(
+  rawStyleMap: Map<string, PrevYearStyleData>,
+  rawPlcMap:   Map<string, PrevYearPlcData>,
+): PrevYearStyleCandidate[] {
+  const candidates: PrevYearStyleCandidate[] = []
+
+  for (const [styleCode, styleData] of rawStyleMap) {
+    if (!styleData.styleName) continue   // 상품명 없는 행 제외
+
+    // PLC 데이터는 없어도 후보로 등록 (weeklyNormSales 빈 배열)
+    const plcData = rawPlcMap.get(styleCode) ?? {
+      totalNormSales: 0, salesBeforeCurrent: 0, salesAfterCurrent: 0,
+      currentWeekSales: 0, estRemainWeeks: 0, weeklyNormSales: [],
+    }
+
+    candidates.push({
+      styleCode,
+      styleName:        styleData.styleName,
+      weekNormSalesQty: styleData.weekNormSalesQty,
+      cumSalesRate:     styleData.cumSalesRate,
+      estRemainWeeks:   plcData.estRemainWeeks,
+      weeklyNormSales:  plcData.weeklyNormSales,
+      prevYearData: {
+        style: styleData,
+        plc:   plcData,
+      },
+    })
+  }
+
+  return candidates
 }
 
 // ─────────────────────────────────────────────
@@ -560,7 +653,7 @@ function parseFromCheckSheet(wb: XLSX.WorkBook): ParseResult {
     ?? wb.SheetNames[0]
   const ws = wb.Sheets[targetSheet]
   if (!ws) {
-    return { styles: [], errors: ['유효한 시트를 찾을 수 없습니다.'], sheetName: '' }
+    return { styles: [], errors: ['유효한 시트를 찾을 수 없습니다.'], sheetName: '', prevYearCandidates: [], styleNameMap: {} }
   }
 
   const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
@@ -633,7 +726,7 @@ function parseFromCheckSheet(wb: XLSX.WorkBook): ParseResult {
   if (styleMap.size === 0) {
     errors.push('스타일 코드를 찾을 수 없습니다. 컬럼 구조를 확인하세요.')
   }
-  return { styles: Array.from(styleMap.values()), errors, sheetName: targetSheet }
+  return { styles: Array.from(styleMap.values()), errors, sheetName: targetSheet, prevYearCandidates: [], styleNameMap: {} }
 }
 
 // ─────────────────────────────────────────────

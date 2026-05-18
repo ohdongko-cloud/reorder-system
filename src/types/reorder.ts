@@ -7,6 +7,7 @@ export type Strategy = 1 | 2 | 3 | 4 | 5
 
 /** BI_스타일별전년 시트 파싱 결과 (전년 동 주간 실적) */
 export interface PrevYearStyleData {
+  styleName: string         // 상품명 (col4)
   orderQty: number          // 발주량
   cumInboundQty: number     // 누적입고량
   cumSalesQty: number       // 누적 판매량
@@ -15,6 +16,17 @@ export interface PrevYearStyleData {
   weekNormSalesQty: number  // 기간 정상판매량 ← N_prev 핵심
   cumSalesRate: number      // 누적 입고대비 판매율 (0~100)
   weekSalesRate: number     // 기간 판매율 (0~100)
+}
+
+/** TModal에서 상품명 유사도 검색에 사용하는 전년 상품 후보 엔트리 */
+export interface PrevYearStyleCandidate {
+  styleCode: string         // 전년 스타일 코드
+  styleName: string         // 전년 상품명
+  weekNormSalesQty: number  // 전년 동 주간 정상판매량
+  cumSalesRate: number      // 전년 누적 판매율 (0~100)
+  estRemainWeeks: number    // 잔여 예상 주수
+  weeklyNormSales: number[] // 주별 판매 배열
+  prevYearData: PrevYearData  // 선택 시 스타일에 적용할 전체 데이터
 }
 
 /** BI_전년PLC 시트 파싱 결과 (전년 시즌 주별 판매 곡선) */
@@ -65,6 +77,7 @@ export interface StyleRow {
   id: string
   session_id: string
   code: string
+  name?: string             // 상품명 (BI_스타일별전년 col4 또는 현재 BI에서 파싱)
   type: StyleType
   badges: StyleBadge[]  // 0~3개 복수 뱃지
   price: number

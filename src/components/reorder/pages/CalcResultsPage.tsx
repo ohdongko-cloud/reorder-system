@@ -521,7 +521,7 @@ function StyleRows({ style, onTModal, onUpdate }: {
                         {style.type === 'reorder' ? '리오더' : style.type === 'test_cn' ? '사입' : '일반'}
                       </span>
                     </div>
-                    <div className="text-[10px] text-slate-500 truncate max-w-[120px] mb-0.5">상품명 —</div>
+                    <div className="text-[10px] text-slate-500 truncate max-w-[120px] mb-0.5">{style.name ?? '—'}</div>
                     <div className="text-[10px] text-slate-400 mb-0.5">
                       ₩{style.price.toLocaleString()} · {style.days_since_inbound}일 · {style.stores}매장
                     </div>
