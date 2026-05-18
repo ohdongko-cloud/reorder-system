@@ -119,7 +119,7 @@ export function TModal({ open, onClose, color, style }: Props) {
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-sm">
-            T값 / 입력 조정 — <span className="font-mono">{style.code}</span> · {color.color_name}
+            📅 전년 유사상품 선택 — <span className="font-mono">{style.code}</span> · {color.color_name}
           </DialogTitle>
         </DialogHeader>
 
