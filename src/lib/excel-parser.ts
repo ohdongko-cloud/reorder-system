@@ -99,8 +99,10 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
   const distMap = buildDistributionMap(wb)
 
   // ── 3a. 전년 데이터 맵 (시트 없으면 빈 맵) ──
-  const prevYearStyleMap = buildPrevYearStyleMap(wb)
-  const prevYearPlcMap   = buildPrevYearPlcMap(wb, refDateStr)
+  // BI_스타일별전년 헤더에서 전년 참조 주차를 별도로 읽음 (BI는 2026, 전년시트는 2025)
+  const prevYearRefDateStr = readPrevYearRefDate(wb)
+  const { exactMap: prevStyleExact, categoryMap: prevStyleCategory } = buildPrevYearStyleMap(wb)
+  const { exactMap: prevPlcExact,   categoryMap: prevPlcCategory   } = buildPrevYearPlcMap(wb, prevYearRefDateStr)
 
   // ── 4. BI 시트 파싱 ──
   // styleCode → { colors, price, firstInbound, totalL }
@@ -201,9 +203,18 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
       }
     })
 
-    // ── 전년 데이터 결합 ──
-    const prevStyle = prevYearStyleMap.get(styleCode) ?? null
-    const prevPlc   = prevYearPlcMap.get(styleCode)   ?? null
+    // ── 전년 데이터 결합 (3단계 매칭) ──
+    const suffixKey  = getItemSuffixKey(styleCode)
+    const itemCatKey = getItemCategoryKey(styleCode)
+
+    // 1단계: 정확한 연도 무관 매칭 (캐리오버, 연도만 다른 동일 디자인)
+    let prevStyle = suffixKey ? (prevStyleExact.get(suffixKey) ?? null) : null
+    let prevPlc   = suffixKey ? (prevPlcExact.get(suffixKey)   ?? null) : null
+
+    // 2단계: 아이템 카테고리 평균 폴백 (신규 스타일)
+    if (!prevStyle && itemCatKey) prevStyle = prevStyleCategory.get(itemCatKey) ?? null
+    if (!prevPlc   && itemCatKey) prevPlc   = prevPlcCategory.get(itemCatKey)   ?? null
+
     const prevYear: PrevYearData | null = (prevStyle && prevPlc)
       ? { style: prevStyle, plc: prevPlc }
       : null
@@ -227,19 +238,49 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
 }
 
 // ─────────────────────────────────────────────
-//  BI_스타일별전년 → styleCode: PrevYearStyleData 맵
+//  스타일 코드 키 유틸 (연도 문자 제거)
+//  MIA0AG301B → "0A_301B"  (item_suffix, 연도 문자 pos5 제거)
 // ─────────────────────────────────────────────
-function buildPrevYearStyleMap(wb: XLSX.WorkBook): Map<string, PrevYearStyleData> {
-  const map = new Map<string, PrevYearStyleData>()
-  // 시트명 대소문자 무관 탐지
+function getItemSuffixKey(code: string): string | null {
+  if (code.length < 7) return null
+  return code.slice(3, 5) + '_' + code.slice(6)   // item(2) + '_' + suffix(pos6~)
+}
+
+function getItemCategoryKey(code: string): string | null {
+  if (code.length < 5) return null
+  return code.slice(3, 5)   // item 2글자
+}
+
+// ─────────────────────────────────────────────
+//  BI_스타일별전년 → 2종 맵 반환
+//   exactMap:    suffixKey(연도 제거) → PrevYearStyleData  (1단계 정확 매칭용)
+//   categoryMap: itemCatKey(2글자)   → PrevYearStyleData  (2단계 평균 폴백용)
+// ─────────────────────────────────────────────
+function buildPrevYearStyleMap(wb: XLSX.WorkBook): {
+  exactMap:    Map<string, PrevYearStyleData>
+  categoryMap: Map<string, PrevYearStyleData>
+} {
+  const exactMap    = new Map<string, PrevYearStyleData>()
+  const categoryMap = new Map<string, PrevYearStyleData>()
+
   const sheetName = wb.SheetNames.find(n =>
     n.replace(/[_\s]/g, '').toLowerCase().includes('스타일별전년') ||
     n.replace(/[_\s]/g, '').toLowerCase().includes('스타일전년')
   )
-  if (!sheetName) return map
+  if (!sheetName) return { exactMap, categoryMap }
 
-  const ws = wb.Sheets[sheetName]
+  const ws   = wb.Sheets[sheetName]
   const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+
+  // 아이템 카테고리별 누적값 (평균 계산용)
+  type CatAccum = {
+    weekNormSalesQty: number; weekSalesQty: number
+    cumNormSalesQty: number;  cumSalesQty: number
+    cumSalesRate: number;     weekSalesRate: number
+    orderQty: number;         cumInboundQty: number
+    count: number
+  }
+  const catAccum = new Map<string, CatAccum>()
 
   // 행 5+ : 스타일 개별 데이터 (행4=헤더, 행5=집계)
   for (let i = 5; i < rows.length; i++) {
@@ -247,7 +288,7 @@ function buildPrevYearStyleMap(wb: XLSX.WorkBook): Map<string, PrevYearStyleData
     const styleCode = String(row[PREV_YEAR_STYLE.styleCode] ?? '').trim()
     if (!styleCode.startsWith('MI')) continue
 
-    map.set(styleCode, {
+    const data: PrevYearStyleData = {
       orderQty:         toInt(row[PREV_YEAR_STYLE.orderQty]),
       cumInboundQty:    toInt(row[PREV_YEAR_STYLE.cumInboundQty]),
       cumSalesQty:      toInt(row[PREV_YEAR_STYLE.cumSalesQty]),
@@ -256,43 +297,105 @@ function buildPrevYearStyleMap(wb: XLSX.WorkBook): Map<string, PrevYearStyleData
       weekNormSalesQty: toInt(row[PREV_YEAR_STYLE.weekNormSalesQty]),
       cumSalesRate:     toFloat(row[PREV_YEAR_STYLE.cumSalesRate]),
       weekSalesRate:    toFloat(row[PREV_YEAR_STYLE.weekSalesRate]),
+    }
+
+    // 1단계 맵: suffixKey(연도 제거)
+    const suffixKey = getItemSuffixKey(styleCode)
+    if (suffixKey) exactMap.set(suffixKey, data)
+
+    // 카테고리 누적 (2단계 평균용)
+    const catKey = getItemCategoryKey(styleCode)
+    if (catKey) {
+      const acc = catAccum.get(catKey)
+      if (!acc) {
+        catAccum.set(catKey, {
+          weekNormSalesQty: data.weekNormSalesQty,
+          weekSalesQty:     data.weekSalesQty,
+          cumNormSalesQty:  data.cumNormSalesQty,
+          cumSalesQty:      data.cumSalesQty,
+          cumSalesRate:     data.cumSalesRate,
+          weekSalesRate:    data.weekSalesRate,
+          orderQty:         data.orderQty,
+          cumInboundQty:    data.cumInboundQty,
+          count: 1,
+        })
+      } else {
+        acc.weekNormSalesQty += data.weekNormSalesQty
+        acc.weekSalesQty     += data.weekSalesQty
+        acc.cumNormSalesQty  += data.cumNormSalesQty
+        acc.cumSalesQty      += data.cumSalesQty
+        acc.cumSalesRate     += data.cumSalesRate
+        acc.weekSalesRate    += data.weekSalesRate
+        acc.orderQty         += data.orderQty
+        acc.cumInboundQty    += data.cumInboundQty
+        acc.count++
+      }
+    }
+  }
+
+  // 2단계 맵: 카테고리 평균
+  for (const [catKey, acc] of catAccum) {
+    const n = acc.count
+    categoryMap.set(catKey, {
+      orderQty:         Math.round(acc.orderQty         / n),
+      cumInboundQty:    Math.round(acc.cumInboundQty    / n),
+      cumSalesQty:      Math.round(acc.cumSalesQty      / n),
+      weekSalesQty:     Math.round(acc.weekSalesQty     / n),
+      cumNormSalesQty:  Math.round(acc.cumNormSalesQty  / n),
+      weekNormSalesQty: Math.round(acc.weekNormSalesQty / n),
+      cumSalesRate:     acc.cumSalesRate  / n,
+      weekSalesRate:    acc.weekSalesRate / n,
     })
   }
-  return map
+
+  return { exactMap, categoryMap }
 }
 
 // ─────────────────────────────────────────────
-//  BI_전년PLC → styleCode: PrevYearPlcData 맵
+//  BI_전년PLC → 2종 맵 반환
+//   exactMap:    suffixKey → PrevYearPlcData
+//   categoryMap: itemCatKey → PrevYearPlcData (카테고리 평균)
 // ─────────────────────────────────────────────
-function buildPrevYearPlcMap(wb: XLSX.WorkBook, refDateStr: string): Map<string, PrevYearPlcData> {
-  const map = new Map<string, PrevYearPlcData>()
+function buildPrevYearPlcMap(wb: XLSX.WorkBook, refDateStr: string): {
+  exactMap:    Map<string, PrevYearPlcData>
+  categoryMap: Map<string, PrevYearPlcData>
+} {
+  const exactMap    = new Map<string, PrevYearPlcData>()
+  const categoryMap = new Map<string, PrevYearPlcData>()
+
   const sheetName = wb.SheetNames.find(n =>
-    n.replace(/[_\s]/g, '').toLowerCase().includes('전년plc') ||
     n.replace(/[_\s]/g, '').toLowerCase().includes('전년plc')
   )
-  if (!sheetName) return map
+  if (!sheetName) return { exactMap, categoryMap }
 
-  const ws = wb.Sheets[sheetName]
+  const ws   = wb.Sheets[sheetName]
   const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-
-  // 행4 = 컬럼 헤더
   const header = rows[4] as unknown[]
 
-  // 현재 주차 컬럼 찾기: refDateStr "yyyy-MM-dd - yyyy-MM-dd" → "MM/DD~MM/DD"
+  // 전년 참조 주차(MM/DD~MM/DD) 컬럼 탐색
+  // refDateStr은 BI_스타일별전년의 참조일 (2025-MM-DD - 2025-MM-DD) 형식
   const currentWeekKey = refDateStrToWeekKey(refDateStr)
   let currentColIdx = -1
   if (currentWeekKey) {
     for (let c = PREV_PLC.weeklyStart; c < header.length; c++) {
       if (String(header[c] ?? '').replace(/\s/g, '') === currentWeekKey) {
-        currentColIdx = c
-        break
+        currentColIdx = c; break
       }
     }
   }
-  // 못 찾으면 가장 마지막 주차 전주 사용 (폴백)
+  // 폴백: 컬럼 중간 근처 (시즌 중반)
   if (currentColIdx < 0) {
-    currentColIdx = Math.min(PREV_PLC.weeklyStart + 20, (header.length - 1))
+    currentColIdx = Math.min(PREV_PLC.weeklyStart + 21, header.length - 1)
   }
+
+  // 카테고리 누적값
+  type PlcCatAccum = {
+    totalNormSales: number; salesBeforeCurrent: number
+    salesAfterCurrent: number; currentWeekSales: number
+    estRemainWeeks: number; count: number
+    weeklyNormSalesSum: number[]
+  }
+  const catAccum = new Map<string, PlcCatAccum>()
 
   // 행 8+ : 스타일 개별 데이터
   for (let i = 8; i < rows.length; i++) {
@@ -309,42 +412,87 @@ function buildPrevYearPlcMap(wb: XLSX.WorkBook, refDateStr: string): Map<string,
     const relIdx           = currentColIdx - PREV_PLC.weeklyStart
     const currentWeekSales = toInt(row[currentColIdx])
 
-    // 현재 주차까지 누적 (inclusive)
     let salesBeforeCurrent = 0
     for (let j = 0; j <= Math.min(relIdx, weeklyNormSales.length - 1); j++) {
       salesBeforeCurrent += weeklyNormSales[j]
     }
-
     const salesAfterCurrent = Math.max(0, totalNormSales - salesBeforeCurrent)
-
-    // 잔여 예상 주수: 잔여량 / 현재 주판량 (최소 1)
     const estRemainWeeks = currentWeekSales > 0
       ? Math.max(1, Math.round(salesAfterCurrent / currentWeekSales))
       : 0
 
-    map.set(styleCode, {
-      totalNormSales,
-      salesBeforeCurrent,
-      salesAfterCurrent,
-      currentWeekSales,
-      estRemainWeeks,
-      weeklyNormSales,
+    const plcData: PrevYearPlcData = {
+      totalNormSales, salesBeforeCurrent, salesAfterCurrent,
+      currentWeekSales, estRemainWeeks, weeklyNormSales,
+    }
+
+    // 1단계 맵
+    const suffixKey = getItemSuffixKey(styleCode)
+    if (suffixKey) exactMap.set(suffixKey, plcData)
+
+    // 카테고리 누적
+    const catKey = getItemCategoryKey(styleCode)
+    if (catKey && totalNormSales > 0) {
+      const acc = catAccum.get(catKey)
+      if (!acc) {
+        catAccum.set(catKey, {
+          totalNormSales, salesBeforeCurrent, salesAfterCurrent,
+          currentWeekSales, estRemainWeeks,
+          count: 1,
+          weeklyNormSalesSum: [...weeklyNormSales],
+        })
+      } else {
+        acc.totalNormSales      += totalNormSales
+        acc.salesBeforeCurrent  += salesBeforeCurrent
+        acc.salesAfterCurrent   += salesAfterCurrent
+        acc.currentWeekSales    += currentWeekSales
+        acc.estRemainWeeks      += estRemainWeeks
+        acc.count++
+        for (let w = 0; w < weeklyNormSales.length; w++) {
+          acc.weeklyNormSalesSum[w] = (acc.weeklyNormSalesSum[w] ?? 0) + weeklyNormSales[w]
+        }
+      }
+    }
+  }
+
+  // 2단계 맵: 카테고리 평균
+  for (const [catKey, acc] of catAccum) {
+    const n = acc.count
+    categoryMap.set(catKey, {
+      totalNormSales:     Math.round(acc.totalNormSales     / n),
+      salesBeforeCurrent: Math.round(acc.salesBeforeCurrent / n),
+      salesAfterCurrent:  Math.round(acc.salesAfterCurrent  / n),
+      currentWeekSales:   Math.round(acc.currentWeekSales   / n),
+      estRemainWeeks:     Math.round(acc.estRemainWeeks      / n),
+      weeklyNormSales:    acc.weeklyNormSalesSum.map(v => Math.round(v / n)),
     })
   }
-  return map
+
+  return { exactMap, categoryMap }
 }
 
 // ─────────────────────────────────────────────
-//  유틸: refDateStr → "MM/DD~MM/DD" 변환
+//  유틸: BI_스타일별전년 시트의 참조 주차 문자열 읽기
+//  행1, col2 = "2025-05-12 - 2025-05-18"
+// ─────────────────────────────────────────────
+function readPrevYearRefDate(wb: XLSX.WorkBook): string {
+  const sheetName = wb.SheetNames.find(n =>
+    n.replace(/[_\s]/g, '').toLowerCase().includes('스타일별전년') ||
+    n.replace(/[_\s]/g, '').toLowerCase().includes('스타일전년')
+  )
+  if (!sheetName) return ''
+  const rows: unknown[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' })
+  return String((rows[1] as unknown[])?.[2] ?? '')
+}
+
+// ─────────────────────────────────────────────
+//  유틸: refDateStr → "MM/DD~MM/DD" 변환 (월/일만 사용)
 //  "2025-05-12 - 2025-05-18" → "05/12~05/18"
 // ─────────────────────────────────────────────
 function refDateStrToWeekKey(refDateStr: string): string | null {
-  // 패턴: YYYY-MM-DD - YYYY-MM-DD
   const m = refDateStr.match(/(\d{4})-(\d{2})-(\d{2})\s*-\s*\d{4}-(\d{2})-(\d{2})/)
   if (!m) return null
-  const startMM = m[2], startDD = m[3]
-  const endMM   = m[4], endDD   = m[5]
-  return `${startMM}/${startDD}~${endMM}/${endDD}`
+  return `${m[2]}/${m[3]}~${m[4]}/${m[5]}`
 }
 
 // ─────────────────────────────────────────────
