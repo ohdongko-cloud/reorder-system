@@ -3,6 +3,36 @@ export type StyleBadge = 'carryover' | 'qr_test' | 're'
 export type PlcStage = '도입기' | '성장기' | '유지기' | '쇠퇴기'
 export type Strategy = 1 | 2 | 3 | 4 | 5
 
+// ─── 전년 데이터 타입 ────────────────────────────────────────────────
+
+/** BI_스타일별전년 시트 파싱 결과 (전년 동 주간 실적) */
+export interface PrevYearStyleData {
+  orderQty: number          // 발주량
+  cumInboundQty: number     // 누적입고량
+  cumSalesQty: number       // 누적 판매량
+  weekSalesQty: number      // 기간(동 주간) 판매량
+  cumNormSalesQty: number   // 누적 정상판매량
+  weekNormSalesQty: number  // 기간 정상판매량 ← N_prev 핵심
+  cumSalesRate: number      // 누적 입고대비 판매율 (0~100)
+  weekSalesRate: number     // 기간 판매율 (0~100)
+}
+
+/** BI_전년PLC 시트 파싱 결과 (전년 시즌 주별 판매 곡선) */
+export interface PrevYearPlcData {
+  totalNormSales: number      // 전년 시즌 총 정상판매량
+  salesBeforeCurrent: number  // 현재 주차까지 누적 판매량
+  salesAfterCurrent: number   // 현재 주차 이후 잔여 판매량
+  currentWeekSales: number    // 현재 주차 판매량
+  estRemainWeeks: number      // 잔여 예상 주수
+  weeklyNormSales: number[]   // 56주 주별 배열 (index 0 = 첫 주)
+}
+
+/** 스타일 단위 전년 통합 데이터 */
+export interface PrevYearData {
+  style: PrevYearStyleData
+  plc: PrevYearPlcData
+}
+
 export interface ColorRow {
   id: string
   style_id: string
@@ -43,6 +73,7 @@ export interface StyleRow {
   plc: PlcStage
   colors: ColorRow[]
   strategy: Strategy
+  prevYear?: PrevYearData | null  // 전년 동 주간 + PLC 데이터 (없으면 null)
 }
 
 export interface ReorderSession {

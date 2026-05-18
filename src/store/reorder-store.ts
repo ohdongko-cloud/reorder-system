@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { StyleRow, ColorRow, ReorderSession, Strategy } from '@/types/reorder'
-import { calcOld, calcNew, calcDeltaPct } from '@/lib/reorder-calc'
+import { calcOld, calcNewWithPrevYear, calcDeltaPct } from '@/lib/reorder-calc'
 import { MIN_RECOMMEND_QTY, inferBadges } from '@/lib/constants'
 
 interface ReorderState {
@@ -37,10 +37,16 @@ interface ReorderState {
 
 function recalcColor(color: ColorRow, style: StyleRow): ColorRow {
   const strategyToUse = color.strategy ?? style.strategy
+
+  // 스타일 전체 누적입고량 합계 (N_prev 컬러 배분용)
+  const totalStyleL = style.colors.reduce((sum, c) => sum + c.l, 0)
+
   const old = calcOld(color.l, color.m, color.n, color.r, color.s, color.t, style.stores)
-  const nw = calcNew(
+  const nw = calcNewWithPrevYear(
     color.l, color.m, color.n, color.r, color.s, color.t,
-    style.stores, style.plc, style.days_since_inbound, strategyToUse
+    style.stores, style.plc, style.days_since_inbound, strategyToUse,
+    style.prevYear ?? null,
+    totalStyleL
   )
 
   return {

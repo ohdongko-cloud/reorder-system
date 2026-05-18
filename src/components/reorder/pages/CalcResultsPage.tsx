@@ -477,6 +477,8 @@ function StyleRows({ style, onTModal, onUpdate }: {
   const colorCount   = style.colors.length
   const statusBadges = getStatusBadges(style)
   const { year, season, item } = parseStyleCode(style.code)
+  // 전년 데이터 활용: 컬러별 N_prev 배분을 위한 스타일 총 L
+  const totalStyleL = style.colors.reduce((s, c) => s + c.l, 0)
 
   return (
     <>
@@ -546,6 +548,18 @@ function StyleRows({ style, onTModal, onUpdate }: {
                         ))}
                       </div>
                     )}
+                    {/* 전년 판매율 표시 */}
+                    {style.prevYear && (
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <span className="text-[9px] px-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold leading-4"
+                          title={`전년 누적 입고대비 판매율. 잔여 예상 ${style.prevYear.plc.estRemainWeeks}주`}>
+                          전년 {style.prevYear.style.cumSalesRate.toFixed(0)}%
+                        </span>
+                        <span className="text-[9px] text-slate-400">
+                          잔{style.prevYear.plc.estRemainWeeks}주
+                        </span>
+                      </div>
+                    )}
                     {/* 전년 유사상품 선택 링크 */}
                     <button
                       onClick={() => onTModal(style.colors[0], style)}
@@ -603,13 +617,36 @@ function StyleRows({ style, onTModal, onUpdate }: {
               </select>
             </td>
 
-            {/* ── 전년/T 버튼 ── */}
+            {/* ── 전년/T ── */}
             <td className="px-1.5 py-1 border-r border-slate-200">
-              <button onClick={() => onTModal(color, style)} disabled={inactive}
-                className="w-full px-1.5 py-1 rounded text-[10px] font-semibold text-white transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                style={{ background: TH_OLD }}>
-                전년상품 선택
-              </button>
+              {style.prevYear && !inactive ? (
+                <div className="flex flex-col gap-0.5 items-center">
+                  {/* 전년 동 주간 판매량 (컬러 L 비율로 배분) */}
+                  <div
+                    className="text-[11px] font-bold tabular-nums text-center"
+                    style={{ color: '#2563eb' }}
+                    title={`전년 동 주간 정상판매량 · 스타일 합계: ${style.prevYear.style.weekNormSalesQty}개`}>
+                    {totalStyleL > 0
+                      ? Math.round(style.prevYear.style.weekNormSalesQty * (color.l / totalStyleL))
+                      : style.prevYear.style.weekNormSalesQty}
+                    <span className="text-[9px] text-slate-400 font-normal ml-0.5">개</span>
+                  </div>
+                  <div className="text-[9px] text-slate-400 text-center leading-none">
+                    잔여~{style.prevYear.plc.estRemainWeeks}주
+                  </div>
+                  <button onClick={() => onTModal(color, style)} disabled={inactive}
+                    className="w-full px-1 py-0.5 rounded text-[9px] font-semibold text-white transition-colors disabled:opacity-40"
+                    style={{ background: TH_OLD }}>
+                    T선택
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => onTModal(color, style)} disabled={inactive}
+                  className="w-full px-1.5 py-1 rounded text-[10px] font-semibold text-white transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                  style={{ background: TH_OLD }}>
+                  전년상품 선택
+                </button>
+              )}
             </td>
 
             {/* ── 기존 로직 ── */}
