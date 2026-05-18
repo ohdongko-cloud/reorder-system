@@ -11,10 +11,11 @@ interface Props {
   max?: number
   step?: number
   className?: string
+  style?: React.CSSProperties
   disabled?: boolean
 }
 
-export function InlineNumberInput({ value, onChange, onBlur, min, max, step = 1, className, disabled }: Props) {
+export function InlineNumberInput({ value, onChange, onBlur, min, max, step = 1, className, style, disabled }: Props) {
   const [editing, setEditing] = useState(false)
   const ref = useRef<HTMLInputElement>(null)
 
@@ -37,6 +38,7 @@ export function InlineNumberInput({ value, onChange, onBlur, min, max, step = 1,
         setEditing(false)
         onBlur?.(Number(e.target.value))
       }}
+      style={style}
       className={cn(
         'w-14 px-1.5 py-0.5 text-right text-xs border rounded',
         'bg-amber-50 border-slate-300 focus:bg-blue-50 focus:border-blue-400 focus:outline-none',
