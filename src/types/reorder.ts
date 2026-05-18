@@ -89,6 +89,7 @@ export interface StyleRow {
   colors: ColorRow[]
   strategy: Strategy
   store_expansion: StoreExpansion  // 점포 확장/유지/축소 (default 'expand')
+  costRate?: number | null          // 원가율(%) — 원가(결판가확정) col47
   prevYear?: PrevYearData | null  // 전년 동 주간 + PLC 데이터 (없으면 null)
 }
 

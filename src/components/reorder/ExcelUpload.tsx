@@ -64,6 +64,18 @@ export function ExcelUpload({ onClose }: Props) {
       await new Promise(r => setTimeout(r, 50))
       const { styles, errors, sheetName, prevYearCandidates, styleNameMap } = await parseReorderExcel(buffer)
 
+      // 상품명 전용 파일 (styles 없이 styleNameMap만 있는 경우)
+      if (styles.length === 0 && Object.keys(styleNameMap).length > 0) {
+        applyStyleNames(styleNameMap)
+        if (prevYearCandidates.length > 0) setPrevYearCandidates(prevYearCandidates)
+        toast.success(`상품명 ${Object.keys(styleNameMap).length}개 적용 완료`, {
+          description: '기존 스타일 데이터에 상품명이 업데이트됐습니다.',
+        })
+        setStep('idle')
+        onClose()
+        return
+      }
+
       if (styles.length === 0) {
         toast.error(errors[0] ?? '파싱 실패 — BI 시트가 없거나 MI 스타일 데이터를 찾을 수 없습니다.')
         if (errors.length > 1) errors.slice(1).forEach(w => toast.warning(w))

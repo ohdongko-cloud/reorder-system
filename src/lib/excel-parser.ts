@@ -71,15 +71,74 @@ const WEEKLY_DAYS = 28   // 조회 기간 일수
 const WEEKLY_PER_QUERY = WEEKLY_DAYS / 7  // ≒ 4주
 
 // ─────────────────────────────────────────────
+//  상품명 시트 파싱 (스타일코드 → 상품명 맵)
+//  시트 구조: col0=스타일코드, col1=상품명
+// ─────────────────────────────────────────────
+function parseStyleNameSheet(wb: XLSX.WorkBook): Record<string, string> {
+  const ws = wb.Sheets['상품명']
+  if (!ws) return {}
+  const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+  const map: Record<string, string> = {}
+  // row0 = 헤더, row1~= 데이터
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] as unknown[]
+    const code = String(row[0] ?? '').trim()
+    const name = String(row[1] ?? '').trim()
+    if (code.startsWith('MI') && name) map[code] = name
+  }
+  return map
+}
+
+// ─────────────────────────────────────────────
+//  상품명 시트 → TModal 후보 리스트 (BI_스타일별전년 없을 때 대체)
+//  판매 데이터 없이 이름만 있는 최소 후보 엔트리 생성
+// ─────────────────────────────────────────────
+function buildCandidatesFromNameSheet(wb: XLSX.WorkBook): PrevYearStyleCandidate[] {
+  const nameMap = parseStyleNameSheet(wb)
+  const entries = Object.entries(nameMap)
+  if (entries.length === 0) return []
+
+  const emptyPlc: PrevYearPlcData = {
+    totalNormSales: 0, salesBeforeCurrent: 0, salesAfterCurrent: 0,
+    currentWeekSales: 0, estRemainWeeks: 0, weeklyNormSales: [],
+  }
+  return entries.map(([styleCode, styleName]) => ({
+    styleCode,
+    styleName,
+    weekNormSalesQty: 0,
+    cumSalesRate: 0,
+    estRemainWeeks: 0,
+    weeklyNormSales: [],
+    prevYearData: {
+      style: {
+        styleName, orderQty: 0, cumInboundQty: 0, cumSalesQty: 0,
+        weekSalesQty: 0, cumNormSalesQty: 0, weekNormSalesQty: 0,
+        cumSalesRate: 0, weekSalesRate: 0,
+      },
+      plc: emptyPlc,
+    },
+  }))
+}
+
+// ─────────────────────────────────────────────
 //  메인 파서
 // ─────────────────────────────────────────────
 export async function parseReorderExcel(buffer: ArrayBuffer): Promise<ParseResult> {
   const wb = XLSX.read(buffer, { type: 'array' })
 
-  if (wb.SheetNames.includes('BI')) {
-    return parseFromBISheets(wb)
+  // 상품명 전용 파일 (BI/CHECK 없이 '상품명' 시트만 있는 경우)
+  // → styles=[], styleNameMap에 이름만 담아 반환 (store에서 기존 styles에 이름 덮어씀)
+  const hasBI    = wb.SheetNames.includes('BI')
+  const hasCheck = wb.SheetNames.some(n => n.includes('리오더예상') || n.includes('CHECK'))
+  const hasNames = wb.SheetNames.includes('상품명')
+
+  if (!hasBI && !hasCheck && hasNames) {
+    const styleNameMap     = parseStyleNameSheet(wb)
+    const prevYearCandidates = buildCandidatesFromNameSheet(wb)
+    return { styles: [], errors: [], sheetName: '상품명', prevYearCandidates, styleNameMap }
   }
-  // 레거시 폴백: 리오더예상_CHECK 시트
+
+  if (hasBI) return parseFromBISheets(wb)
   return parseFromCheckSheet(wb)
 }
 
@@ -101,6 +160,9 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
   // ── 3. 분배확정 → styleCode: { maxStores, totalQty } ──
   const distMap = buildDistributionMap(wb)
 
+  // ── 3b. 원가(결판가확정) → styleCode: 원가율(%) 맵 ──
+  const costRateMap = buildCostRateMap(wb)
+
   // ── 3a. 전년 데이터 맵 (시트 없으면 빈 맵) ──
   // BI_스타일별전년 헤더에서 전년 참조 주차를 별도로 읽음 (BI는 2026, 전년시트는 2025)
   const prevYearRefDateStr = readPrevYearRefDate(wb)
@@ -108,7 +170,11 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
   const { exactMap: prevPlcExact,   categoryMap: prevPlcCategory,   rawMap: prevPlcRaw   } = buildPrevYearPlcMap(wb, prevYearRefDateStr)
 
   // 전년 상품 후보 리스트 (TModal 상품명 검색용)
-  const prevYearCandidates = buildPrevYearCandidateList(prevStyleRaw, prevPlcRaw)
+  // BI_스타일별전년 후보가 없으면 상품명 시트로 대체
+  const prevYearCandidatesFromBI = buildPrevYearCandidateList(prevStyleRaw, prevPlcRaw)
+  const prevYearCandidates = prevYearCandidatesFromBI.length > 0
+    ? prevYearCandidatesFromBI
+    : buildCandidatesFromNameSheet(wb)
 
   // ── 4. BI 시트 파싱 ──
   // styleCode → { colors, price, firstInbound, totalL }
@@ -226,7 +292,7 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
       ? { style: prevStyle, plc: prevPlc }
       : null
 
-    // 상품명: 정확한 suffix 매칭된 전년 데이터에서 가져옴
+    // 상품명 우선순위: BI_스타일별전년 > 상품명 시트 (파싱 후 나중에 병합)
     const styleName = prevStyle?.styleName ?? ''
     if (styleName) styleNameMap[styleCode] = styleName
 
@@ -242,9 +308,16 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
       plc,
       strategy: 3,
       store_expansion: 'expand',
+      costRate: costRateMap.get(styleCode) ?? null,
       colors,
       prevYear,
     })
+  }
+
+  // 상품명 시트 병합: BI_스타일별전년에 없는 스타일코드를 상품명 시트로 보완
+  const nameSheetMap = parseStyleNameSheet(wb)
+  for (const [code, name] of Object.entries(nameSheetMap)) {
+    if (!styleNameMap[code]) styleNameMap[code] = name
   }
 
   return { styles, errors, sheetName: 'BI', prevYearCandidates, styleNameMap }
@@ -617,6 +690,28 @@ function buildWeeklyMap(wb: XLSX.WorkBook): Map<string, number> {
 }
 
 // ─────────────────────────────────────────────
+//  원가(결판가확정) → styleCode: 원가율(%) 맵
+//  col1=스타일, col47=결판가비율(%)
+// ─────────────────────────────────────────────
+function buildCostRateMap(wb: XLSX.WorkBook): Map<string, number> {
+  const map = new Map<string, number>()
+  const ws = wb.Sheets['원가(결판가확정)']
+  if (!ws) return map
+
+  const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] as unknown[]
+    const styleCode = String(row[1] ?? '').trim()
+    if (!styleCode.startsWith('MI')) continue
+    const rate = toFloat(row[47])  // 결판가비율(%)
+    if (rate > 0 && !map.has(styleCode)) {
+      map.set(styleCode, rate)     // 첫 번째 차수(00) 우선
+    }
+  }
+  return map
+}
+
+// ─────────────────────────────────────────────
 //  분배확정 → styleCode: { maxStores, totalQty } 맵
 // ─────────────────────────────────────────────
 function buildDistributionMap(wb: XLSX.WorkBook): Map<string, { maxStores: number; totalQty: number }> {
@@ -728,7 +823,12 @@ function parseFromCheckSheet(wb: XLSX.WorkBook): ParseResult {
   if (styleMap.size === 0) {
     errors.push('스타일 코드를 찾을 수 없습니다. 컬럼 구조를 확인하세요.')
   }
-  return { styles: Array.from(styleMap.values()), errors, sheetName: targetSheet, prevYearCandidates: [], styleNameMap: {} }
+
+  // 상품명 시트 & 전년 후보
+  const styleNameMap       = parseStyleNameSheet(wb)
+  const prevYearCandidates = buildCandidatesFromNameSheet(wb)
+
+  return { styles: Array.from(styleMap.values()), errors, sheetName: targetSheet, prevYearCandidates, styleNameMap }
 }
 
 // ─────────────────────────────────────────────
