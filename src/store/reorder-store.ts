@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { StyleRow, ColorRow, ReorderSession, Strategy } from '@/types/reorder'
 import { calcOld, calcNew, calcDeltaPct } from '@/lib/reorder-calc'
-import { MIN_RECOMMEND_QTY } from '@/lib/constants'
+import { MIN_RECOMMEND_QTY, inferBadges } from '@/lib/constants'
 
 interface ReorderState {
   sessions: ReorderSession[]
@@ -18,7 +18,7 @@ interface ReorderState {
   updateColorField: (
     styleId: string,
     colorId: string,
-    field: 'n' | 's' | 't' | 'r' | 'aj',
+    field: 'n' | 's' | 't' | 'r' | 'aj' | 'weight',
     value: number
   ) => void
 
@@ -54,6 +54,14 @@ function recalcColor(color: ColorRow, style: StyleRow): ColorRow {
   }
 }
 
+function applyColorDefaults(c: ColorRow): ColorRow {
+  return {
+    ...c,
+    s: c.s || 5,           // 판매기간 기본 5주
+    weight: c.weight ?? 1.0, // 가중치 기본 1.0
+  }
+}
+
 export const useReorderStore = create<ReorderState>((set, get) => ({
   sessions: [],
   currentSession: null,
@@ -66,11 +74,16 @@ export const useReorderStore = create<ReorderState>((set, get) => ({
   setLoading: (v) => set({ isLoading: v }),
 
   setStyles: (styles) => {
-    const calculated = styles.map(style => ({
-      ...style,
-      strategy: style.strategy ?? 3,
-      colors: style.colors.map(c => recalcColor(c, { ...style, strategy: style.strategy ?? 3 })),
-    }))
+    const calculated = styles.map(style => {
+      const s: StyleRow = {
+        ...style,
+        strategy: style.strategy ?? 3,
+        badges: inferBadges(style.code),
+        colors: [],
+      }
+      s.colors = style.colors.map(c => recalcColor(applyColorDefaults(c), s))
+      return s
+    })
     set({ styles: calculated })
   },
 
@@ -81,6 +94,7 @@ export const useReorderStore = create<ReorderState>((set, get) => ({
         const colors = style.colors.map(c => {
           if (c.id !== colorId) return c
           const updated = { ...c, [field]: value }
+          // weight doesn't affect calc, but we still call recalcColor for consistency
           return recalcColor(updated, style)
         })
         return { ...style, colors }

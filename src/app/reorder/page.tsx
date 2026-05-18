@@ -9,15 +9,17 @@ import { CalcResultsPage } from '@/components/reorder/pages/CalcResultsPage'
 import { StyleSearchPage } from '@/components/reorder/pages/StyleSearchPage'
 import { DataUploadPage } from '@/components/reorder/pages/DataUploadPage'
 import { HistoryPage } from '@/components/reorder/pages/HistoryPage'
+import { CarryoverListPage } from '@/components/reorder/pages/CarryoverListPage'
 import { useReorderStore } from '@/store/reorder-store'
+import { getWeekRange } from '@/lib/constants'
 import { RefreshCw, LogOut } from 'lucide-react'
 import type { PageKey } from '@/components/reorder/Sidebar'
 
 export default function ReorderPage() {
   const [page, setPage] = useState<PageKey>('dashboard')
-  const isLoading = useReorderStore(s => s.isLoading)
+  const isLoading      = useReorderStore(s => s.isLoading)
   const currentSession = useReorderStore(s => s.currentSession)
-  const router = useRouter()
+  const router         = useRouter()
 
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' })
@@ -36,7 +38,7 @@ export default function ReorderPage() {
             <PageTitle page={page} />
             {currentSession && (
               <span className="text-slate-400 text-xs border-l border-slate-200 pl-3">
-                {currentSession.name} · {currentSession.base_date}
+                {currentSession.name} · {getWeekRange(currentSession.base_date)}
               </span>
             )}
           </div>
@@ -64,11 +66,12 @@ export default function ReorderPage() {
         {/* Page content */}
         {!isLoading && (
           <main className="flex-1 flex flex-col min-h-0">
-            {page === 'dashboard' && <DashboardPage onNavigate={setPage} />}
-            {page === 'results'   && <CalcResultsPage />}
-            {page === 'search'    && <StyleSearchPage />}
-            {page === 'upload'    && <DataUploadPage onNavigate={setPage} />}
-            {page === 'history'   && <HistoryPage />}
+            {page === 'dashboard'  && <DashboardPage onNavigate={setPage} />}
+            {page === 'results'    && <CalcResultsPage />}
+            {page === 'search'     && <StyleSearchPage />}
+            {page === 'upload'     && <DataUploadPage onNavigate={setPage} />}
+            {page === 'history'    && <HistoryPage />}
+            {page === 'carryover'  && <CarryoverListPage />}
           </main>
         )}
       </div>
@@ -78,11 +81,12 @@ export default function ReorderPage() {
 
 function PageTitle({ page }: { page: PageKey }) {
   const labels: Record<PageKey, string> = {
-    dashboard: '대시보드',
-    results:   '계산 결과',
-    search:    '스타일 검색',
-    upload:    '데이터 업로드',
-    history:   '리오더 이력',
+    dashboard:  '대시보드',
+    results:    '계산 결과',
+    search:     '스타일 검색',
+    upload:     '데이터 업로드',
+    history:    '리오더 이력',
+    carryover:  '캐리오버 리스트 관리',
   }
   return <span className="text-sm font-semibold text-slate-800">{labels[page]}</span>
 }

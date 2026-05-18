@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx'
 import type { StyleRow, ColorRow, PlcStage } from '@/types/reorder'
-import { inferStyleType, inferPlc } from '@/lib/constants'
+import { inferStyleType, inferPlc, inferBadges } from '@/lib/constants'
 import { v4 as uuidv4 } from 'uuid'
 
 export interface ParseResult {
@@ -164,6 +164,7 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
         r: 5,    // 재고조정 배수 기본값 (MD 조정 가능)
         s: 8,    // 판매기간 기본값 (MD 조정 가능)
         t: 1.0,  // T값 기본값 (MD 조정 가능)
+        weight: 1.0,
         aj,
       }
     })
@@ -172,6 +173,7 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
       id: accum.id,
       code: styleCode,
       type: inferStyleType(styleCode),
+      badges: inferBadges(styleCode),
       price: accum.price,
       days_since_inbound: days,
       stores,
@@ -297,7 +299,7 @@ function parseFromCheckSheet(wb: XLSX.WorkBook): ParseResult {
       style_id: '',
       color_name: `컬러${(styleMap.get(lastStyleCode)?.colors.length ?? 0) + 1}`,
       color_hex: null,
-      k: 0, l: 0, m: 0, n, r, s, t, aj,
+      k: 0, l: 0, m: 0, n, r, s, t, weight: 1.0, aj,
     }
 
     if (!styleMap.has(lastStyleCode)) {
@@ -305,6 +307,7 @@ function parseFromCheckSheet(wb: XLSX.WorkBook): ParseResult {
         id: uuidv4(),
         code: lastStyleCode,
         type: inferStyleType(lastStyleCode),
+        badges: inferBadges(lastStyleCode),
         price: lastPrice,
         days_since_inbound: lastDays,
         stores: lastStores,

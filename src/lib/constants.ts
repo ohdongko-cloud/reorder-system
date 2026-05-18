@@ -1,4 +1,4 @@
-import type { PlcStage, StyleType } from '@/types/reorder'
+import type { PlcStage, StyleType, StyleBadge } from '@/types/reorder'
 
 export const TOTAL_STORES = 50
 
@@ -87,7 +87,68 @@ export const STYLE_TYPE_COLORS: Record<StyleType, string> = {
   test_cn: 'bg-amber-50 text-amber-700 border-amber-200',
 }
 
-// 스타일 코드에서 타입 추론
+// ── 신규 뱃지 시스템 ──────────────────────────────────────────────
+export const STYLE_BADGE_LABELS: Record<StyleBadge, string> = {
+  carryover: '캐리오버',
+  qr_test:   'QR테스트',
+  re:        'RE',
+}
+
+export const STYLE_BADGE_COLORS: Record<StyleBadge, string> = {
+  carryover: 'bg-blue-100 text-blue-800 border-blue-300',
+  qr_test:   'bg-purple-100 text-purple-800 border-purple-300',
+  re:        'bg-emerald-100 text-emerald-800 border-emerald-300',
+}
+
+// 스타일 코드에서 뱃지 추론 (0~3개 복수)
+export function inferBadges(code: string): StyleBadge[] {
+  const badges: StyleBadge[] = []
+  const upper = code.toUpperCase()
+  const suffix2 = upper.slice(-2)
+  const prev    = upper.slice(-2, -1)
+  // RE 뱃지
+  if (suffix2 === 'RE') badges.push('re')
+  // QR테스트 뱃지
+  if (['MS', 'NS', 'SS', 'TS', 'US'].includes(suffix2)) badges.push('qr_test')
+  // 캐리오버 뱃지 (Q suffix)
+  if (prev === 'Q') badges.push('carryover')
+  return badges
+}
+
+// 스타일 코드 파싱: MIWCKG510T → { year:2026, season:2, item:'CK' }
+// pos(0-idx) 3-4=아이템, 5=연도, 6=월(T=10,V=11,C=12)
+export function parseStyleCode(code: string): { year: number | null; season: number | null; item: string | null } {
+  if (code.length < 7) return { year: null, season: null, item: null }
+  const item     = code.slice(3, 5).toUpperCase()
+  const yearChar = code[5].toUpperCase()
+  const year     = /^[A-Z]$/.test(yearChar) ? 2020 + (yearChar.charCodeAt(0) - 65) : null
+
+  const mc = code[6].toUpperCase()
+  let month: number | null =
+    mc === 'T' ? 10 : mc === 'V' ? 11 : mc === 'C' ? 12
+    : /^[1-9]$/.test(mc) ? parseInt(mc) : null
+
+  const season = month == null ? null
+    : month <= 2 ? 1
+    : month <= 6 ? 2
+    : month <= 8 ? 3 : 4
+
+  return { year, season, item }
+}
+
+// 기간 문자열에서 해당 주 월~일요일 범위 반환 (NO: "2025-05-18" → YES: "2025-05-12 ~ 2025-05-18")
+export function getWeekRange(dateStr: string): string {
+  const d   = new Date(dateStr)
+  const day = d.getDay() // 0=Sun
+  const mon = new Date(d)
+  mon.setDate(d.getDate() - (day === 0 ? 6 : day - 1))
+  const sun = new Date(mon)
+  sun.setDate(mon.getDate() + 6)
+  const fmt = (dt: Date) => dt.toISOString().slice(0, 10)
+  return `${fmt(mon)} ~ ${fmt(sun)}`
+}
+
+// 스타일 코드에서 타입 추론 (backward compat)
 export function inferStyleType(code: string): StyleType {
   const suffix2 = code.slice(-2).toUpperCase()
   const prev = code.slice(-2, -1).toUpperCase()
