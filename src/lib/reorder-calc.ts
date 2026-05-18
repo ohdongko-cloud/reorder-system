@@ -1,4 +1,4 @@
-import type { CalcOldResult, CalcNewResult, PlcStage, Strategy, PrevYearData } from '@/types/reorder'
+import type { CalcOldResult, CalcNewResult, PlcStage, Strategy, PrevYearData, StoreExpansion } from '@/types/reorder'
 import {
   TOTAL_STORES,
   FIXED_W_OLD,
@@ -8,6 +8,7 @@ import {
   SEASON_DAYS,
   DYNAMIC_W_TIERS,
   STRATEGY_W_DELTA,
+  STORE_EXPANSION_TARGET_RATIO,
 } from '@/lib/constants'
 
 /**
@@ -40,7 +41,8 @@ export function calcOld(
 export function calcNew(
   L: number, M: number, N: number, R: number, S: number, T: number,
   stores: number, plc: PlcStage, daysSinceInbound: number,
-  strategy: Strategy = 3
+  strategy: Strategy = 3,
+  storeExpansion: StoreExpansion = 'expand'
 ): CalcNewResult | null {
   if (!N || !L) return null
 
@@ -56,7 +58,9 @@ export function calcNew(
     if (Q > threshold) { eff = e; break }
   }
 
-  const U = 1 + (TOTAL_STORES / stores - 1) * eff
+  const targetRatio = STORE_EXPANSION_TARGET_RATIO[storeExpansion] ?? null
+  const effectiveTarget = targetRatio === null ? TOTAL_STORES : stores * targetRatio
+  const U = Math.max(0.3, 1 + (effectiveTarget / stores - 1) * eff)
   const V = tAdjusted * U
   const X = N * V
   const Y = S * X
@@ -146,10 +150,11 @@ export function calcNewWithPrevYear(
   stores: number, plc: PlcStage, daysSinceInbound: number,
   strategy: Strategy,
   prevYearData: PrevYearData | null | undefined,
-  totalStyleL: number   // 스타일 전체 L 합계 (컬러 N_prev 배분용)
+  totalStyleL: number,   // 스타일 전체 L 합계 (컬러 N_prev 배분용)
+  storeExpansion: StoreExpansion = 'expand'
 ): CalcNewResult | null {
   if (!prevYearData) {
-    return calcNew(L, M, N, R, S, T, stores, plc, daysSinceInbound, strategy)
+    return calcNew(L, M, N, R, S, T, stores, plc, daysSinceInbound, strategy, storeExpansion)
   }
 
   // N 보정
@@ -169,7 +174,7 @@ export function calcNewWithPrevYear(
     prevYearData.style.cumSalesRate
   )
 
-  return calcNew(L, M, nAdjusted, R, sAdjusted, T, stores, plc, daysAdjusted, strategy)
+  return calcNew(L, M, nAdjusted, R, sAdjusted, T, stores, plc, daysAdjusted, strategy, storeExpansion)
 }
 
 export function calcDeltaPct(oldAd: number, newAd: number): number | null {

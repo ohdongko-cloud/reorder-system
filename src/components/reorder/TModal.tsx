@@ -4,9 +4,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useReorderStore } from '@/store/reorder-store'
 import { calcNew, calcOld } from '@/lib/reorder-calc'
-import { PLC_COLORS } from '@/lib/constants'
+import { PLC_COLORS, STORE_EXPANSION_LABELS } from '@/lib/constants'
 import { cn } from '@/lib/utils'
-import type { ColorRow, StyleRow, PrevYearStyleCandidate } from '@/types/reorder'
+import type { ColorRow, StyleRow, PrevYearStyleCandidate, StoreExpansion } from '@/types/reorder'
 
 interface Props {
   open: boolean
@@ -144,11 +144,13 @@ function usePrevYearMatches(style: StyleRow, searchQuery: string): PrevYearStyle
 export function TModal({ open, onClose, color, style }: Props) {
   const updateColorField = useReorderStore(s => s.updateColorField)
   const setStylePrevYear = useReorderStore(s => s.setStylePrevYear)
+  const setStyleStoreExpansion = useReorderStore(s => s.setStyleStoreExpansion)
 
   const [localT, setLocalT] = useState(color.t)
   const [localS, setLocalS] = useState(color.s)
   const [localR, setLocalR] = useState(color.r)
   const [localW, setLocalW] = useState(color.weight ?? 1.0)
+  const [localStoreExpansion, setLocalStoreExpansion] = useState<StoreExpansion>(style.store_expansion ?? 'expand')
   const [selectedCandidate, setSelectedCandidate] = useState<PrevYearStyleCandidate | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -158,10 +160,11 @@ export function TModal({ open, onClose, color, style }: Props) {
       setLocalS(color.s)
       setLocalR(color.r)
       setLocalW(color.weight ?? 1.0)
+      setLocalStoreExpansion(style.store_expansion ?? 'expand')
       setSelectedCandidate(null)
       setSearchQuery('')
     }
-  }, [open, color.t, color.s, color.r, color.weight])
+  }, [open, color.t, color.s, color.r, color.weight, style.store_expansion])
 
   const prevYearMatches = usePrevYearMatches(style, searchQuery)
   const hasCandidates = useReorderStore(s => s.prevYearCandidates.length > 0)
@@ -194,6 +197,7 @@ export function TModal({ open, onClose, color, style }: Props) {
     if (selectedCandidate) {
       setStylePrevYear(style.id, selectedCandidate.prevYearData)
     }
+    setStyleStoreExpansion(style.id, localStoreExpansion)
     onClose()
   }
 
@@ -201,7 +205,7 @@ export function TModal({ open, onClose, color, style }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
-      <DialogContent className="max-w-[1760px] w-[96vw] p-0 overflow-hidden">
+      <DialogContent className="sm:max-w-[92vw] w-[92vw] p-0 overflow-hidden">
         <DialogHeader className="px-5 pt-4 pb-3 border-b border-slate-100">
           <DialogTitle className="text-sm flex items-center gap-2">
             <span>📅 전년 유사상품 선택</span>
@@ -216,7 +220,7 @@ export function TModal({ open, onClose, color, style }: Props) {
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex divide-x divide-slate-100" style={{ maxHeight: '76vh', overflowY: 'auto' }}>
+        <div className="flex divide-x divide-slate-100" style={{ height: '88vh', overflowY: 'auto' }}>
 
           {/* ── LEFT PANEL ── */}
           <div className="w-[300px] shrink-0 px-5 py-4 space-y-5">
@@ -260,6 +264,34 @@ export function TModal({ open, onClose, color, style }: Props) {
                   onChange={setLocalW}
                   ticks={['1.0x', '1.3x', '1.5x', '1.7x', '2.0x']}
                 />
+              </div>
+            </div>
+
+            {/* 점포 확장/유지/축소 */}
+            <div className="space-y-1.5">
+              <div className="text-xs font-semibold text-slate-700">점포 배분 계획</div>
+              <div className="flex gap-1.5">
+                {(['expand', 'maintain', 'reduce'] as StoreExpansion[]).map(opt => (
+                  <button
+                    key={opt}
+                    onClick={() => setLocalStoreExpansion(opt)}
+                    className={cn(
+                      'flex-1 py-1.5 rounded text-[10px] font-semibold border transition-colors',
+                      localStoreExpansion === opt
+                        ? opt === 'expand' ? 'bg-blue-600 text-white border-blue-600'
+                          : opt === 'maintain' ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-amber-600 text-white border-amber-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                    )}
+                  >
+                    {STORE_EXPANSION_LABELS[opt]}
+                  </button>
+                ))}
+              </div>
+              <div className="text-[9px] text-slate-400">
+                {localStoreExpansion === 'expand' && '전체 매장(50개) 기준 확장 발주'}
+                {localStoreExpansion === 'maintain' && '현재 운영 매장 수 기준 발주 (확장 없음)'}
+                {localStoreExpansion === 'reduce' && '현재 매장의 70% 기준 발주 (축소)'}
               </div>
             </div>
 

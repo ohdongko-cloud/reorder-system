@@ -241,6 +241,7 @@ function parseFromBISheets(wb: XLSX.WorkBook): ParseResult {
       stores,
       plc,
       strategy: 3,
+      store_expansion: 'expand',
       colors,
       prevYear,
     })
@@ -715,6 +716,7 @@ function parseFromCheckSheet(wb: XLSX.WorkBook): ParseResult {
         stores: lastStores,
         plc: inferPlc(lastDays),
         strategy: 3,
+        store_expansion: 'expand',
         colors: [],
       })
     }

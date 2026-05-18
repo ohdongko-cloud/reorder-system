@@ -26,9 +26,9 @@ export const PLC_COLORS: Record<PlcStage, string> = {
 // 신규 4단계 효율 임계값 [Q threshold, efficiency]
 export const NEW_EFFICIENCY_TIERS: Array<[number, number]> = [
   [0.25, 0.95],
-  [0.15, 0.88],
-  [0.10, 0.78],
-  [0,    0.65],
+  [0.15, 0.90],
+  [0.10, 0.85],
+  [0,    0.80],
 ]
 
 // 동적 W: 시즌 진행률(%) 기준
@@ -51,11 +51,25 @@ export const MIN_RECOMMEND_QTY = 300
 // AC=(L+AB)/(1-W)-L 공식에서 W가 높을수록 추천 수량 증가
 // 공격적(5) → W 증가 → 추천↑ / 보수적(1) → W 감소 → 추천↓
 export const STRATEGY_W_DELTA: Record<number, number> = {
-  1: -0.10,   // 보수적 (W 감소 → 추천↓)
-  2: -0.05,
-  3:  0.00,   // 표준
-  4: +0.05,
-  5: +0.10,   // 공격적 (W 증가 → 추천↑)
+  1: -0.05,
+  2:  0.00,
+  3: +0.05,
+  4: +0.15,
+  5: +0.25,
+}
+
+// 점포 확장/유지/축소: effectiveTarget = ratio===null ? TOTAL_STORES : stores*ratio
+// U = max(0.3, 1 + (effectiveTarget/stores - 1) * eff)
+export const STORE_EXPANSION_TARGET_RATIO: Record<string, number | null> = {
+  expand:   null,   // TOTAL_STORES(50) 목표 — 전체 확장 (기존 동작)
+  maintain: 1.0,    // 현재 매장수 유지 (U=1)
+  reduce:   0.7,    // 현재의 70% 축소
+}
+
+export const STORE_EXPANSION_LABELS: Record<string, string> = {
+  expand:   '전체 확장',
+  maintain: '유지',
+  reduce:   '축소',
 }
 
 export const STRATEGY_LABELS: Record<number, string> = {

@@ -1,3 +1,5 @@
+export type StoreExpansion = 'expand' | 'maintain' | 'reduce'
+
 export type StyleType = 'normal' | 'reorder' | 'test_cn'
 export type StyleBadge = 'carryover' | 'qr_test' | 're'
 export type PlcStage = '도입기' | '성장기' | '유지기' | '쇠퇴기'
@@ -86,6 +88,7 @@ export interface StyleRow {
   plc: PlcStage
   colors: ColorRow[]
   strategy: Strategy
+  store_expansion: StoreExpansion  // 점포 확장/유지/축소 (default 'expand')
   prevYear?: PrevYearData | null  // 전년 동 주간 + PLC 데이터 (없으면 null)
 }
 

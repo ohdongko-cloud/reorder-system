@@ -40,7 +40,7 @@ export function Sidebar({ current, onChange }: Props) {
             E
           </div>
           <div>
-            <div className="text-[13px] font-bold" style={{ color: '#f1f5f9' }}>의류CU 리오더</div>
+            <div className="text-[13px] font-bold" style={{ color: '#f1f5f9' }}>리오더 시스템</div>
             <div className="text-[10px]" style={{ color: '#475569' }}>v0.3 · 이랜드 내부용</div>
           </div>
         </div>

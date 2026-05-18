@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { StyleRow, ColorRow, ReorderSession, Strategy, PrevYearStyleCandidate, PrevYearData } from '@/types/reorder'
+import type { StyleRow, ColorRow, ReorderSession, Strategy, PrevYearStyleCandidate, PrevYearData, StoreExpansion } from '@/types/reorder'
 import { calcOld, calcNewWithPrevYear, calcDeltaPct } from '@/lib/reorder-calc'
 import { MIN_RECOMMEND_QTY, inferBadges } from '@/lib/constants'
 
@@ -22,6 +22,8 @@ interface ReorderState {
 
   /** 특정 스타일의 prevYear 데이터를 교체하고 재계산 */
   setStylePrevYear: (styleId: string, prevYear: PrevYearData | null) => void
+
+  setStyleStoreExpansion: (styleId: string, expansion: StoreExpansion) => void
 
   updateColorField: (
     styleId: string,
@@ -54,7 +56,8 @@ function recalcColor(color: ColorRow, style: StyleRow): ColorRow {
     color.l, color.m, color.n, color.r, color.s, color.t,
     style.stores, style.plc, style.days_since_inbound, strategyToUse,
     style.prevYear ?? null,
-    totalStyleL
+    totalStyleL,
+    style.store_expansion ?? 'expand'
   )
 
   return {
@@ -116,6 +119,7 @@ export const useReorderStore = create<ReorderState>((set, get) => ({
       const s: StyleRow = {
         ...style,
         strategy: style.strategy ?? 3,
+        store_expansion: style.store_expansion ?? 'expand' as StoreExpansion,
         badges: inferBadges(style.code),
         colors: [],
       }
@@ -136,6 +140,17 @@ export const useReorderStore = create<ReorderState>((set, get) => ({
           return recalcColor(updated, style)
         })
         return { ...style, colors }
+      })
+      return { styles }
+    })
+  },
+
+  setStyleStoreExpansion: (styleId, expansion) => {
+    set(state => {
+      const styles = state.styles.map(style => {
+        if (style.id !== styleId) return style
+        const updated = { ...style, store_expansion: expansion }
+        return { ...updated, colors: updated.colors.map(c => recalcColor(c, updated)) }
       })
       return { styles }
     })

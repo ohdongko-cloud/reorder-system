@@ -7,8 +7,8 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "의류CU 리오더",
-  description: "의류CU 리오더 자동화 시스템",
+  title: "리오더 시스템",
+  description: "리오더 시스템",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
